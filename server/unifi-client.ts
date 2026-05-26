@@ -115,17 +115,24 @@ export class UnifiClient {
       headers: { 'Content-Type': 'application/json' },
     })
 
-    // Fix 3: re-authenticate automatically when session cookie expires (401)
+    // Fix 3: re-authenticate automatically when session cookie expires (401).
+    // Guards:
+    //   - _retry flag prevents infinite loop when login() succeeds but the
+    //     retried request still returns 401 (e.g. insufficient privileges).
+    //   - err.config guard avoids TypeError for pre-dispatch errors where
+    //     axios does not attach a config object.
     this.http.interceptors.response.use(
       res => res,
       async (err) => {
-        if (err.response?.status === 401 && this.loggedIn) {
+        const cfg = err.config as (Record<string, unknown> | undefined)
+        if (err.response?.status === 401 && this.loggedIn && cfg && !cfg._retry) {
           this.loggedIn = false
+          cfg._retry = true
           try {
             await this.login()
-            return this.http.request(err.config)
+            return this.http.request(cfg)
           } catch {
-            // re-login failed — propagate original error
+            // re-login failed — fall through and propagate original error
           }
         }
         throw err

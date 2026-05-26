@@ -47,8 +47,10 @@ function saveConfig(cfg: UnifiConfig) {
   try {
     const dir = path.dirname(CONFIG_PATH)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    // Fix 9: restrict file to owner-only (password stored in plaintext)
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 })
+    // Fix 9 (complete): writeFileSync mode only applies to *new* files via O_CREAT;
+    // explicitly tighten permissions on an already-existing file too.
+    try { fs.chmodSync(CONFIG_PATH, 0o600) } catch { /* non-fatal */ }
   } catch (e) {
     console.warn('[config] Could not persist config:', e)
   }
@@ -192,8 +194,9 @@ app.get('/api/unifi/clients', async (_req, res) => {
 app.get('/api/unifi/events', async (req, res) => {
   try {
     const client = getUnifiClient()
-    // Fix 7: parseInt with radix + fallback prevents NaN reaching the UniFi URL
-    const limit = Math.min(parseInt(String(req.query.limit ?? '500'), 10) || 500, 5000)
+    // Fix 7: validate limit — reject NaN, 0, and negatives; cap at 5000
+    const parsed = parseInt(String(req.query.limit ?? '500'), 10)
+    const limit  = Math.min(Number.isNaN(parsed) || parsed <= 0 ? 500 : parsed, 5000)
     const raw = await client.getEvents(limit)
 
     const logs = raw.map((e: UnifiEvent) => {
