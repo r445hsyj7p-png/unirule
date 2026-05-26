@@ -179,8 +179,8 @@ export default function Policies() {
     <div className="flex flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Policy Engine</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">KI-gestützte Zero-Trust-Empfehlungen</p>
+          <h1 className="text-2xl font-bold">Zero Trust Advisor</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">Regelbasierte Zero-Trust-Empfehlungen</p>
         </div>
         <Button size="sm" onClick={() => { firewallQ.refetch(); networksQ.refetch(); refetch() }}>
           <Brain className="h-4 w-4" />

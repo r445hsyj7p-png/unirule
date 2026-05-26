@@ -7,6 +7,7 @@
 
 import express from 'express'
 import cors from 'cors'
+import cookieParser from 'cookie-parser'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
@@ -15,17 +16,31 @@ import {
   type UnifiConfig, type UnifiDevice, type UnifiClient as UClient,
   type UnifiEvent, type UnifiNetwork,
 } from './unifi-client.js'
+import {
+  requireAuth, handleAuthStatus, handleSetup,
+  handleLogin, handleLogout, handleMe, handleBlockedIps,
+} from './auth.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
 const PORT = process.env.PORT ?? 3000
 
 // ── Middleware ────────────────────────────────────────────────────────────────
-// Fix 1: restrict CORS — same-origin in production (frontend served by this server),
-// allow Vite dev server only in development.
 const devOrigin = process.env.NODE_ENV !== 'production' ? 'http://localhost:5173' : false
 app.use(cors({ origin: devOrigin, credentials: !!devOrigin }))
 app.use(express.json())
+app.use(cookieParser())
+
+// ── Auth endpoints (public — no requireAuth) ─────────────────────────────────
+app.get('/api/auth/status',      handleAuthStatus)
+app.post('/api/auth/setup',      handleSetup)
+app.post('/api/auth/login',      handleLogin)
+app.post('/api/auth/logout',     handleLogout)
+app.get('/api/auth/me',          requireAuth, handleMe)
+app.get('/api/auth/blocked-ips', requireAuth, handleBlockedIps)
+
+// ── All subsequent /api/* routes require authentication ──────────────────────
+app.use('/api', requireAuth)
 
 // Persistent config in /data/config.json (mounted volume in production)
 const CONFIG_PATH = process.env.CONFIG_PATH ?? path.join(__dirname, '..', 'data', 'config.json')

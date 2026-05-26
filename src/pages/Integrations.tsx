@@ -536,19 +536,10 @@ const OTHER_INTEGRATIONS: OtherIntegration[] = [
 
 function OtherToolCard({ integration }: { integration: OtherIntegration }) {
   const [expanded, setExpanded] = useState(false)
-  const status = statusConfig[integration.status] ?? statusConfig.idle
-  const StatusIcon = status.icon
   const Icon = integration.icon
 
-  const setupCmds: Record<string, string> = {
-    'Batfish':  'docker run -d -p 9997:9997 -p 9996:9996 --name batfish batfish/batfish:latest',
-    'ntopng':   'apt install ntopng && ntopng -i eth0 --http-port 3000 -d /var/lib/ntopng',
-    'Graphviz': 'apt install graphviz python3-graphviz && python3 unirule-topo-export.py | dot -Tsvg -o topo.svg',
-    'pyunifi':  'pip install pyunifi\n# Dann im Log Explorer → Datei importieren',
-  }
-
   return (
-    <Card className={integration.status === 'error' ? 'border-red-500/30' : ''}>
+    <Card className="border-dashed opacity-80">
       <CardHeader className="pb-3 cursor-pointer select-none" onClick={() => setExpanded(e => !e)}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -556,14 +547,11 @@ function OtherToolCard({ integration }: { integration: OtherIntegration }) {
             <div>
               <CardTitle className="text-sm flex items-center gap-2">
                 {integration.name}
-                <Badge className={`text-[9px] border ${status.color}`}>
-                  <StatusIcon className="h-2.5 w-2.5 mr-0.5" />{status.label}
+                <Badge variant="outline" className="text-[9px] border gap-1">
+                  Coming Soon
                 </Badge>
               </CardTitle>
-              <CardDescription className="text-xs mt-0.5">
-                {integration.description}
-                {integration.lastSync && ` · Letzte Sync: ${timeAgo(new Date(integration.lastSync))}`}
-              </CardDescription>
+              <CardDescription className="text-xs mt-0.5">{integration.description}</CardDescription>
             </div>
           </div>
           {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
@@ -571,19 +559,14 @@ function OtherToolCard({ integration }: { integration: OtherIntegration }) {
       </CardHeader>
       {expanded && (
         <CardContent className="space-y-3">
-          {setupCmds[integration.name] && (
-            <div>
-              <label className="text-[10px] text-muted-foreground uppercase mb-1.5 block">Setup</label>
-              <pre className="bg-muted/50 border rounded-md p-3 text-[11px] font-mono whitespace-pre-wrap">{setupCmds[integration.name]}</pre>
-            </div>
-          )}
+          <p className="text-xs text-muted-foreground">
+            Die Integration mit <strong>{integration.name}</strong> ist für eine spätere Phase geplant.
+            Dokumentation und Setup-Anleitung werden mit der Implementierung bereitgestellt.
+          </p>
           <div className="flex gap-2">
-            <Button size="sm" variant="outline" className="h-7 text-xs">
-              <RefreshCw className="h-3 w-3" />Neu verbinden
-            </Button>
             <Button size="sm" variant="ghost" asChild className="h-7 text-xs">
               <a href={integration.docsUrl} target="_blank" rel="noreferrer">
-                <ExternalLink className="h-3 w-3" />Docs
+                <ExternalLink className="h-3 w-3" />Projektseite
               </a>
             </Button>
           </div>

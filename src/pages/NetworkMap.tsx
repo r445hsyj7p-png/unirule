@@ -335,22 +335,19 @@ export default function NetworkMap() {
               </CardContent>
             </Card>
 
-            {/* Tool integrations status */}
+            {/* Data source */}
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold">Datenquellen</CardTitle>
+                <CardTitle className="text-sm font-semibold">Datenquelle</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                {[
-                  { name: 'UniFi Poller', status: 'live', color: 'text-green-500' },
-                  { name: 'Batfish', status: 'analysiert', color: 'text-blue-500' },
-                  { name: 'Graphviz', status: 'bereit', color: 'text-yellow-500' },
-                ].map(tool => (
-                  <div key={tool.name} className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">{tool.name}</span>
-                    <span className={`font-medium ${tool.color}`}>{tool.status}</span>
-                  </div>
-                ))}
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">UniFi API</span>
+                  <span className="font-medium text-green-500">Live</span>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Topologie wird aus Echtzeit-API-Daten des UniFi Controllers generiert.
+                </p>
               </CardContent>
             </Card>
           </div>
