@@ -1,13 +1,76 @@
+import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, ExternalLink } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { mockPolicyViolations, mockFirewallRules } from '@/data/mock'
+import { useFirewallRules, useThreats } from '@/hooks/useUnifi'
+import { useConnectionStore } from '@/lib/store'
+import { DataState } from '@/components/ui/empty-state'
 import { timeAgo, formatNumber } from '@/lib/utils'
 
 export default function PolicyViolations() {
   const navigate = useNavigate()
+  const configured = useConnectionStore(s => s.configured)
+
+  const firewallQuery = useFirewallRules()
+  const { threats, isLoading, isError, refetch } = useThreats()
+
+  const violations = useMemo(() => {
+    const map: Record<string, { id: string; rule: string; device: string; srcIp: string; dstIp: string; proto: string; port: number; zone: string; count: number; timestamp: string }> = {}
+    threats
+      .filter(e => /block|deny|reject|drop|violation|policy/i.test(e.description))
+      .forEach(e => {
+        const rule = e.category || 'Unbekannte Regel'
+        if (map[rule]) {
+          map[rule].count += 1
+        } else {
+          map[rule] = {
+            id: e.id,
+            rule,
+            device: e.device,
+            srcIp: e.device,
+            dstIp: 'unknown',
+            proto: 'TCP',
+            port: 0,
+            zone: e.zone,
+            count: 1,
+            timestamp: e.timestamp.toISOString(),
+          }
+        }
+      })
+    return Object.values(map)
+  }, [threats])
+
+  const disabledRulesCount = useMemo(
+    () => (firewallQuery.data ?? []).filter(r => !r.enabled).length,
+    [firewallQuery.data],
+  )
+
+  const totalEvents = violations.reduce((s, v) => s + v.count, 0)
+
+  if (!configured || isLoading || isError) {
+    return (
+      <div className="flex flex-col gap-6 p-6">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate(-1)}>
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold">Policy-Verletzungen</h1>
+            <p className="text-muted-foreground text-sm mt-0.5">0 aktive Verstöße · 0 Ereignisse gesamt</p>
+          </div>
+        </div>
+        <DataState
+          isLoading={isLoading}
+          isError={isError}
+          notConfigured={!configured}
+          errorMessage="Fehler beim Laden"
+          onRetry={refetch}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -18,7 +81,7 @@ export default function PolicyViolations() {
         <div>
           <h1 className="text-2xl font-bold">Policy-Verletzungen</h1>
           <p className="text-muted-foreground text-sm mt-0.5">
-            {mockPolicyViolations.length} aktive Verstöße · {formatNumber(mockPolicyViolations.reduce((s, v) => s + v.count, 0))} Ereignisse gesamt
+            {violations.length} aktive Verstöße · {formatNumber(totalEvents)} Ereignisse gesamt
           </p>
         </div>
       </div>
@@ -27,21 +90,19 @@ export default function PolicyViolations() {
       <div className="grid grid-cols-3 gap-3">
         <Card className="border-red-500/20 bg-red-500/5">
           <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-red-500">{mockPolicyViolations.length}</div>
+            <div className="text-2xl font-bold text-red-500">{violations.length}</div>
             <div className="text-xs text-muted-foreground">Aktive Verstöße</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold">{formatNumber(mockPolicyViolations.reduce((s, v) => s + v.count, 0))}</div>
+            <div className="text-2xl font-bold">{formatNumber(totalEvents)}</div>
             <div className="text-xs text-muted-foreground">Ereignisse gesamt</div>
           </CardContent>
         </Card>
         <Card className="border-orange-500/20">
           <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold text-orange-500">
-              {mockFirewallRules.filter(r => !r.enabled).length}
-            </div>
+            <div className="text-2xl font-bold text-orange-500">{disabledRulesCount}</div>
             <div className="text-xs text-muted-foreground">Regeln deaktiviert</div>
           </CardContent>
         </Card>
@@ -69,41 +130,50 @@ export default function PolicyViolations() {
                 </tr>
               </thead>
               <tbody>
-                {mockPolicyViolations.map(v => (
-                  <tr key={v.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <AlertTriangle className="h-3.5 w-3.5 text-orange-500 shrink-0" />
-                        <span className="font-mono text-xs">{v.rule}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="text-xs font-medium">{v.device}</div>
-                      <div className="text-[10px] text-muted-foreground font-mono">{v.srcIp}</div>
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                      <div>{v.srcIp} → {v.dstIp}</div>
-                      <div className="text-[10px]">{v.proto} / Port {v.port}</div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge variant="outline" className="text-[10px]">{v.zone}</Badge>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span className="font-bold text-orange-500">{formatNumber(v.count)}</span>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{timeAgo(v.timestamp)}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1">
-                        <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => navigate('/rules')}>
-                          Regel aktivieren
-                        </Button>
-                        <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => navigate('/policies')}>
-                          <ExternalLink className="h-3 w-3" />
-                        </Button>
-                      </div>
+                {violations.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
+                      <AlertTriangle className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                      <p className="text-sm">Keine Policy-Verletzungen gefunden</p>
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  violations.map(v => (
+                    <tr key={v.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="h-3.5 w-3.5 text-orange-500 shrink-0" />
+                          <span className="font-mono text-xs">{v.rule}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="text-xs font-medium">{v.device}</div>
+                        <div className="text-[10px] text-muted-foreground font-mono">{v.srcIp}</div>
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                        <div>{v.srcIp} → {v.dstIp}</div>
+                        <div className="text-[10px]">{v.proto} / Port {v.port}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant="outline" className="text-[10px]">{v.zone}</Badge>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="font-bold text-orange-500">{formatNumber(v.count)}</span>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{timeAgo(v.timestamp)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => navigate('/rules')}>
+                            Regel aktivieren
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => navigate('/policies')}>
+                            <ExternalLink className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>

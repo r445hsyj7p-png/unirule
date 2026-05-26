@@ -1,22 +1,52 @@
 import { useState } from 'react'
 import { ShieldAlert, Filter, Search, Eye, CheckCircle } from 'lucide-react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { mockThreats } from '@/data/mock'
+import { useThreats } from '@/hooks/useUnifi'
+import { useConnectionStore } from '@/lib/store'
+import { DataState } from '@/components/ui/empty-state'
 import { severityBg, timeAgo } from '@/lib/utils'
 
+type ThreatItem = ReturnType<typeof useThreats>['threats'][number]
+
 export default function Threats() {
+  const configured = useConnectionStore(s => s.configured)
+  const { threats, isLoading, isError, refetch } = useThreats()
+
   const [search, setSearch] = useState('')
   const [severityFilter, setSeverityFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
-  const [selected, setSelected] = useState<typeof mockThreats[0] | null>(null)
+  const [selected, setSelected] = useState<ThreatItem | null>(null)
 
-  const filtered = mockThreats.filter(t => {
+  if (!configured || isLoading || isError) {
+    return (
+      <div className="flex flex-col gap-6 p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Threats &amp; Alerts</h1>
+            <p className="text-muted-foreground text-sm mt-0.5">0 offene Bedrohungen</p>
+          </div>
+          <Button variant="outline" size="sm">
+            <Filter className="h-4 w-4" />
+            Export
+          </Button>
+        </div>
+        <DataState
+          isLoading={isLoading}
+          isError={isError}
+          notConfigured={!configured}
+          errorMessage="Fehler beim Laden"
+          onRetry={refetch}
+        />
+      </div>
+    )
+  }
+
+  const filtered = threats.filter(t => {
     const matchSearch = t.title.toLowerCase().includes(search.toLowerCase()) ||
       t.device.toLowerCase().includes(search.toLowerCase()) ||
       t.zone.toLowerCase().includes(search.toLowerCase())
@@ -26,18 +56,18 @@ export default function Threats() {
   })
 
   const counts = {
-    critical: mockThreats.filter(t => t.severity === 'critical').length,
-    high: mockThreats.filter(t => t.severity === 'high').length,
-    medium: mockThreats.filter(t => t.severity === 'medium').length,
-    low: mockThreats.filter(t => t.severity === 'low').length,
+    critical: threats.filter(t => t.severity === 'critical').length,
+    high: threats.filter(t => t.severity === 'high').length,
+    medium: threats.filter(t => t.severity === 'medium').length,
+    low: (threats as Array<{ severity: string }>).filter(t => t.severity === 'low').length,
   }
 
   return (
     <div className="flex flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Threats & Alerts</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">{mockThreats.filter(t => t.status === 'open').length} offene Bedrohungen</p>
+          <h1 className="text-2xl font-bold">Threats &amp; Alerts</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">{threats.filter(t => t.status === 'open').length} offene Bedrohungen</p>
         </div>
         <Button variant="outline" size="sm">
           <Filter className="h-4 w-4" />
@@ -126,13 +156,12 @@ export default function Threats() {
                     <span>·</span>
                     <span>{threat.zone}</span>
                     <span>·</span>
-                    <span>{timeAgo(threat.timestamp)}</span>
+                    <span>{timeAgo(threat.timestamp.toISOString())}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <Badge variant="outline" className={`text-[10px] ${
                     threat.status === 'open' ? 'text-red-500 border-red-500/30' :
-                    threat.status === 'investigating' ? 'text-yellow-500 border-yellow-500/30' :
                     'text-green-500 border-green-500/30'
                   }`}>
                     {threat.status}
@@ -182,7 +211,7 @@ export default function Threats() {
                   </div>
                   <div className="bg-muted/50 rounded-lg p-3">
                     <div className="text-[10px] text-muted-foreground uppercase mb-1">Erkannt</div>
-                    <div className="font-medium">{timeAgo(selected.timestamp)}</div>
+                    <div className="font-medium">{timeAgo(selected.timestamp.toISOString())}</div>
                   </div>
                 </div>
                 {selected.cve && (
