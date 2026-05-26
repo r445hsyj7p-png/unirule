@@ -156,7 +156,7 @@ export default function Threats() {
                     <span>·</span>
                     <span>{threat.zone}</span>
                     <span>·</span>
-                    <span>{timeAgo(threat.timestamp.toISOString())}</span>
+                    <span>{timeAgo(threat.timestamp)}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -211,7 +211,7 @@ export default function Threats() {
                   </div>
                   <div className="bg-muted/50 rounded-lg p-3">
                     <div className="text-[10px] text-muted-foreground uppercase mb-1">Erkannt</div>
-                    <div className="font-medium">{timeAgo(selected.timestamp.toISOString())}</div>
+                    <div className="font-medium">{timeAgo(selected.timestamp)}</div>
                   </div>
                 </div>
                 {selected.cve && (

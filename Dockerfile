@@ -1,4 +1,4 @@
-# Stage 1: Build
+# ── Stage 1: Build frontend ───────────────────────────────────────────────────
 FROM node:22-alpine AS builder
 WORKDIR /app
 
@@ -8,19 +8,28 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-# Stage 2: Serve with nginx
-FROM nginx:alpine AS runner
-COPY --from=builder /app/dist /usr/share/nginx/html
+# ── Stage 2: Production server ────────────────────────────────────────────────
+FROM node:22-alpine AS runner
+WORKDIR /app
 
-# SPA routing: redirect all 404s to index.html
-RUN printf 'server {\n\
-    listen 80;\n\
-    root /usr/share/nginx/html;\n\
-    index index.html;\n\
-    location / {\n\
-        try_files $uri $uri/ /index.html;\n\
-    }\n\
-}\n' > /etc/nginx/conf.d/default.conf
+# Install only production dependencies
+COPY package*.json ./
+RUN npm ci --omit=dev
 
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+# Copy compiled frontend from builder
+COPY --from=builder /app/dist ./dist
+
+# Copy server TypeScript sources
+# Node 22 runs .ts files natively via --experimental-strip-types
+COPY server/ ./server/
+
+# Persistent config lives in a mounted volume at /data
+RUN mkdir -p /data
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV CONFIG_PATH=/data/config.json
+
+EXPOSE 3000
+
+CMD ["node", "--experimental-strip-types", "server/index.ts"]

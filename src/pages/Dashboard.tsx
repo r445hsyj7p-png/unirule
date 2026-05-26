@@ -385,7 +385,7 @@ export default function Dashboard() {
                     {t.cve && <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-mono">{t.cve}</span>}
                   </div>
                   <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
-                    <span>{t.device}</span><span>·</span><span>{t.zone}</span><span>·</span><span>{timeAgo(t.timestamp.toISOString())}</span>
+                    <span>{t.device}</span><span>·</span><span>{t.zone}</span><span>·</span><span>{timeAgo(t.timestamp)}</span>
                   </div>
                 </div>
                 <Badge variant="outline" className={`text-[10px] shrink-0 ${

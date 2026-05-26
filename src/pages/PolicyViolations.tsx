@@ -160,7 +160,7 @@ export default function PolicyViolations() {
                       <td className="px-4 py-3 text-right">
                         <span className="font-bold text-orange-500">{formatNumber(v.count)}</span>
                       </td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">{timeAgo(v.timestamp)}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{timeAgo(new Date(v.timestamp))}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-1">
                           <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => navigate('/rules')}>

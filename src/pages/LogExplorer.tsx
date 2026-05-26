@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useEvents } from '@/hooks/useUnifi'
 import { useConnectionStore } from '@/lib/store'
-import { UnifiLogRow } from '@/lib/api'
+import type { UnifiLogRow } from '@/lib/api'
 import { DataState } from '@/components/ui/empty-state'
 
 const levelColors: Record<string, string> = {

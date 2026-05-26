@@ -552,7 +552,7 @@ function OtherToolCard({ integration }: { integration: OtherIntegration }) {
               </CardTitle>
               <CardDescription className="text-xs mt-0.5">
                 {integration.description}
-                {integration.lastSync && ` · Letzte Sync: ${timeAgo(integration.lastSync)}`}
+                {integration.lastSync && ` · Letzte Sync: ${timeAgo(new Date(integration.lastSync))}`}
               </CardDescription>
             </div>
           </div>
