@@ -23,7 +23,7 @@ import {
   getAuthStore, updatePassword,
 } from './auth.js'
 import { simulatePacket } from './simulate.js'
-import { lookupOui } from './oui.js'
+import { lookupOui, inferCategory } from './oui.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -180,11 +180,18 @@ app.get('/api/unifi/clients', async (_req, res) => {
     )
 
     function toDevice(c: UClient, isActive: boolean) {
-      // Use UniFi's oui string as input; our lookup normalises and enriches it
+      // 1. Try MAC-prefix lookup (OUI_DB)
       const ouiInfo = lookupOui(c.mac)
+      // 2. If not in DB: use UniFi's own manufacturer string (e.g. "Apple, Inc.")
       const manufacturer = ouiInfo.manufacturer !== 'Unknown'
         ? ouiInfo.manufacturer
         : (c.oui ?? '')
+      // 3. Category: DB result if known; otherwise run heuristic on manufacturer name
+      //    (lookupOui fallback receives the MAC hex string which never matches keyword
+      //    patterns — we must explicitly call inferCategory on the human-readable name)
+      const category = ouiInfo.category !== 'unknown'
+        ? ouiInfo.category
+        : inferCategory(manufacturer)
       return {
         id: c._id,
         name: c.hostname ?? c.mac,
@@ -199,7 +206,7 @@ app.get('/api/unifi/clients', async (_req, res) => {
         txBytes: c.tx_bytes,
         signal: c.signal,
         oui: manufacturer,
-        category: ouiInfo.category,
+        category,
       }
     }
 
@@ -341,11 +348,12 @@ app.patch('/api/unifi/firewall/:id', async (req, res) => {
 app.post('/api/simulate/packet', async (req, res) => {
   const body = req.body as Record<string, unknown>
   const { srcIp, dstIp } = body
-  if (typeof srcIp !== 'string' || !srcIp) {
-    return res.status(400).json({ error: 'INVALID_BODY', message: '`srcIp` required' })
+  const IP_RE = /^(\d{1,3}\.){3}\d{1,3}$/
+  if (typeof srcIp !== 'string' || !IP_RE.test(srcIp)) {
+    return res.status(400).json({ error: 'INVALID_BODY', message: '`srcIp` muss eine gültige IPv4-Adresse sein' })
   }
-  if (typeof dstIp !== 'string' || !dstIp) {
-    return res.status(400).json({ error: 'INVALID_BODY', message: '`dstIp` required' })
+  if (typeof dstIp !== 'string' || !IP_RE.test(dstIp)) {
+    return res.status(400).json({ error: 'INVALID_BODY', message: '`dstIp` muss eine gültige IPv4-Adresse sein' })
   }
   try {
     const client = getUnifiClient()
@@ -392,7 +400,23 @@ app.post('/api/simulate/packet', async (req, res) => {
 
 // ── Auth: change password ─────────────────────────────────────────────────────
 // POST /api/auth/change-password
+// Rate-limited: 5 wrong-oldPassword attempts per IP per 15 minutes
+const changePwFailures = new Map<string, { count: number; until: number }>()
+function changePwClientIp(req: express.Request): string {
+  const fwd = req.headers['x-forwarded-for']
+  if (typeof fwd === 'string') return fwd.split(',')[0].trim()
+  return req.socket?.remoteAddress ?? 'unknown'
+}
+
 app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  const ip = changePwClientIp(req)
+  const now = Date.now()
+  const entry = changePwFailures.get(ip)
+  if (entry && now < entry.until) {
+    const mins = Math.ceil((entry.until - now) / 60_000)
+    return res.status(429).json({ error: 'RATE_LIMITED', message: `Zu viele Fehlversuche. Bitte ${mins} Minute(n) warten.` })
+  }
+
   const { oldPassword, newPassword } = req.body as { oldPassword?: string; newPassword?: string }
   if (!oldPassword || !newPassword) {
     return res.status(400).json({ error: 'MISSING_FIELDS', message: 'oldPassword und newPassword erforderlich.' })
@@ -406,8 +430,14 @@ app.post('/api/auth/change-password', requireAuth, async (req, res) => {
   }
   const match = await bcrypt.compare(oldPassword, store.passwordHash)
   if (!match) {
+    const cur = changePwFailures.get(ip) ?? { count: 0, until: 0 }
+    cur.count++
+    if (cur.count >= 5) cur.until = now + 15 * 60_000
+    changePwFailures.set(ip, cur)
     return res.status(401).json({ error: 'INVALID_PASSWORD', message: 'Aktuelles Passwort ist falsch.' })
   }
+  // Success — clear failure counter
+  changePwFailures.delete(ip)
   try {
     await updatePassword(newPassword)
     return res.json({ ok: true })

@@ -210,12 +210,23 @@ interface BlockedIp {
   lockedUntil: number
 }
 
+/** Formats a past timestamp as "vor X Min/Std" */
 function formatRelative(ms: number): string {
-  const diff = Math.abs(Date.now() - ms)
+  const diff = Date.now() - ms   // positive = past
   if (diff < 60_000) return 'gerade eben'
   if (diff < 3_600_000) return `vor ${Math.floor(diff / 60_000)} Min`
   if (diff < 86_400_000) return `vor ${Math.floor(diff / 3_600_000)} Std`
   return `vor ${Math.floor(diff / 86_400_000)} Tagen`
+}
+
+/** Formats a future timestamp as "in X Min/Std" */
+function formatUntil(ms: number): string {
+  const diff = ms - Date.now()   // positive = future
+  if (diff <= 0) return 'abgelaufen'
+  if (diff < 60_000) return `in ${Math.ceil(diff / 1_000)} Sek`
+  if (diff < 3_600_000) return `in ${Math.ceil(diff / 60_000)} Min`
+  if (diff < 86_400_000) return `in ${Math.ceil(diff / 3_600_000)} Std`
+  return `in ${Math.ceil(diff / 86_400_000)} Tagen`
 }
 
 function formatAbsolute(ms: number): string {
@@ -308,7 +319,7 @@ function BlockedIpsCard() {
                       <span className="ml-1 text-[10px]">({formatAbsolute(entry.lockedAt)})</span>
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">
-                      <span title={formatAbsolute(entry.lockedUntil)}>{formatRelative(entry.lockedUntil)}</span>
+                      <span title={formatAbsolute(entry.lockedUntil)}>{formatUntil(entry.lockedUntil)}</span>
                       <span className="ml-1 text-[10px]">({formatAbsolute(entry.lockedUntil)})</span>
                     </td>
                   </tr>

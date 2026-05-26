@@ -232,11 +232,23 @@ export class UnifiClient {
     return this.get('cnt/alarm')
   }
 
-  /** Toggle or partially update a firewall rule */
+  /**
+   * Toggle or partially update a firewall rule.
+   *
+   * UniFi Classic Controller (v5/v6) treats PUT as a full *replace*, not a
+   * merge-patch — sending only { enabled: false } would zero all other fields.
+   * We therefore GET the current rule first, merge the patch over it, and PUT
+   * the complete merged object.
+   */
   async updateFirewallRule(id: string, patch: Partial<UnifiFirewallRule>): Promise<UnifiFirewallRule> {
     await this.ensureLoggedIn()
-    const res = await this.http.put(`/api/s/${this.site}/rest/firewallrule/${id}`, patch)
-    return (res.data?.data?.[0] ?? res.data) as UnifiFirewallRule
+    // 1. Fetch the current full rule state
+    const getRes = await this.http.get(`/api/s/${this.site}/rest/firewallrule/${id}`)
+    const current = (getRes.data?.data?.[0] ?? getRes.data) as UnifiFirewallRule
+    // 2. Merge patch over the full object — PUT body is always the complete rule
+    const merged = { ...current, ...patch }
+    const putRes = await this.http.put(`/api/s/${this.site}/rest/firewallrule/${id}`, merged)
+    return (putRes.data?.data?.[0] ?? putRes.data) as UnifiFirewallRule
   }
 
   /** Test connectivity — returns site info */

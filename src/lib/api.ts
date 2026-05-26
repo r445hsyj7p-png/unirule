@@ -15,6 +15,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',   // always send the HttpOnly session cookie
     ...options,
   })
   const body = await res.json().catch(() => ({ error: res.statusText }))
@@ -67,13 +68,10 @@ export const api = {
   changePassword: (oldPassword: string, newPassword: string) =>
     request<{ ok: boolean }>('/api/auth/change-password', {
       method: 'POST', body: JSON.stringify({ oldPassword, newPassword }),
-      credentials: 'include',
     }),
 
   getBlockedIps: () =>
-    request<Array<{ ip: string; lockedAt: number; lockedUntil: number }>>('/api/auth/blocked-ips', {
-      credentials: 'include',
-    }),
+    request<Array<{ ip: string; lockedAt: number; lockedUntil: number }>>('/api/auth/blocked-ips'),
 }
 
 // ── Response types (matches server normalisation) ─────────────────────────────

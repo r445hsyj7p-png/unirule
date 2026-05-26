@@ -45,6 +45,7 @@ export interface SimulationResult {
 export interface SimulateParams {
   srcIp: string
   dstIp: string
+  srcPort?: number
   dstPort?: number
   proto?: 'tcp' | 'udp' | 'icmp' | 'all'
   hypotheticalRules?: Array<{
@@ -314,7 +315,7 @@ export function simulatePacket(
   apiRules: ApiFirewallRule[],
   networks: ApiNetwork[],
 ): SimulationResult {
-  const { srcIp, dstIp, dstPort, proto } = params
+  const { srcIp, dstIp, srcPort, dstPort, proto } = params
   const requestIsNew = true // We always simulate new connections
 
   // 1. Build all rule sets
@@ -465,6 +466,11 @@ export function simulatePacket(
     // Destination port
     if (!skipReason && !portMatches(dstPort, rule.dstPort)) {
       skipReason = `Zielport ${dstPort ?? '–'} passt nicht zu ${rule.dstPort}`
+    }
+
+    // Source port (rules with srcPort constraints must be evaluated)
+    if (!skipReason && !portMatches(srcPort, rule.srcPort)) {
+      skipReason = `Quellport ${srcPort ?? '–'} passt nicht zu ${rule.srcPort}`
     }
 
     // Protocol

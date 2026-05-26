@@ -24,10 +24,9 @@ interface ToggleDialogProps {
   onConfirm: () => void
   onCancel: () => void
   isPending: boolean
-  rulesData: UnifiRuleRow[]
 }
 
-function ToggleDialog({ rule, onConfirm, onCancel, isPending, rulesData }: ToggleDialogProps) {
+function ToggleDialog({ rule, onConfirm, onCancel, isPending }: ToggleDialogProps) {
   if (!rule) return null
   const willEnable = !rule.enabled
   const action = willEnable ? 'aktivieren' : 'deaktivieren'
@@ -96,23 +95,26 @@ export default function Rules() {
 
   const [pendingToggle, setPendingToggle] = useState<UnifiRuleRow | null>(null)
   const [simulationOpen, setSimulationOpen] = useState(false)
+  const [simulationPreviewRule, setSimulationPreviewRule] = useState<{ id: string; enabled: boolean } | undefined>()
   const [optimisticState, setOptimisticState] = useState<Record<string, boolean>>({})
   const [toastMsg, setToastMsg] = useState<{ text: string; ok: boolean } | null>(null)
+  // Track in-flight rule IDs separately — useMutation only stores last variables
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set())
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       api.toggleFirewallRule(id, enabled),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
+      // Clear optimistic entry so fresh server data is displayed
+      setOptimisticState(prev => { const n = { ...prev }; delete n[vars.id]; return n })
+      setPendingIds(prev => { const n = new Set(prev); n.delete(vars.id); return n })
       queryClient.invalidateQueries({ queryKey: ['unifi', 'firewall'] })
       showToast('Regel erfolgreich geändert', true)
     },
     onError: (_err, vars) => {
       // Revert optimistic state
-      setOptimisticState(prev => {
-        const next = { ...prev }
-        delete next[vars.id]
-        return next
-      })
+      setOptimisticState(prev => { const n = { ...prev }; delete n[vars.id]; return n })
+      setPendingIds(prev => { const n = new Set(prev); n.delete(vars.id); return n })
       showToast('Fehler beim Ändern der Regel', false)
     },
   })
@@ -129,10 +131,12 @@ export default function Rules() {
   function confirmToggle() {
     if (!pendingToggle) return
     const newEnabled = !pendingToggle.enabled
-    // Apply optimistic update
-    setOptimisticState(prev => ({ ...prev, [pendingToggle.id]: newEnabled }))
+    const id = pendingToggle.id
     setPendingToggle(null)
-    toggleMutation.mutate({ id: pendingToggle.id, enabled: newEnabled })
+    // Apply optimistic update and register as in-flight
+    setOptimisticState(prev => ({ ...prev, [id]: newEnabled }))
+    setPendingIds(prev => new Set(prev).add(id))
+    toggleMutation.mutate({ id, enabled: newEnabled })
   }
 
   const rules = data ?? []
@@ -161,7 +165,7 @@ export default function Rules() {
           <Button variant="outline" size="sm" onClick={() => refetch()}>
             <RefreshCw className="h-4 w-4" />Aktualisieren
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setSimulationOpen(true)}>
+          <Button variant="outline" size="sm" onClick={() => { setSimulationPreviewRule(undefined); setSimulationOpen(true) }}>
             <Play className="h-4 w-4" />Simulation
           </Button>
         </div>
@@ -234,8 +238,7 @@ export default function Rules() {
                   <tbody>
                     {isLoading ? <RowSkeleton rows={6} cols={8} /> :
                     displayRules.map(rule => {
-                      const isToggling = toggleMutation.isPending &&
-                        toggleMutation.variables?.id === rule.id
+                      const isToggling = pendingIds.has(rule.id)
 
                       return (
                         <tr
@@ -276,7 +279,7 @@ export default function Rules() {
                                 variant="ghost"
                                 size="sm"
                                 className="h-6 text-xs px-2 text-muted-foreground"
-                                disabled={isToggling || toggleMutation.isPending}
+                                disabled={isToggling}
                                 onClick={() => requestToggle(rule)}
                               >
                                 {isToggling
@@ -288,8 +291,11 @@ export default function Rules() {
                                 variant="ghost"
                                 size="sm"
                                 className="h-6 text-xs px-2"
-                                title="Simulation"
-                                onClick={() => setSimulationOpen(true)}
+                                title="Simulation mit dieser Regel"
+                                onClick={() => {
+                                  setSimulationPreviewRule({ id: rule.id, enabled: rule.enabled })
+                                  setSimulationOpen(true)
+                                }}
                               >
                                 <Shield className="h-3 w-3" />
                               </Button>
@@ -312,14 +318,14 @@ export default function Rules() {
         onConfirm={confirmToggle}
         onCancel={() => setPendingToggle(null)}
         isPending={toggleMutation.isPending}
-        rulesData={rules}
       />
 
-      {/* Simulation panel */}
+      {/* Simulation panel — previewRule shows before/after when coming from a toggle row */}
       <SimulationPanel
         open={simulationOpen}
         onClose={() => setSimulationOpen(false)}
         rulesData={rules}
+        previewRule={simulationPreviewRule}
       />
     </div>
   )
