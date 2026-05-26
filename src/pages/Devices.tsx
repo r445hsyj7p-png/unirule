@@ -12,23 +12,30 @@ import { formatBytes } from '@/lib/utils'
 import type { UnifiDeviceRow, UnifiClientRow } from '@/lib/api'
 
 const typeIcons: Record<string, React.ElementType> = {
+  // Infrastructure types from UniFi
   ugw: Shield, udm: Shield, usg: Shield,
   usw: Server, uxg: Server,
   uap: Wifi,
-  workstation: Monitor, laptop: Monitor, client: Monitor,
+  // OUI-derived categories
+  gateway: Shield, switch: Server, ap: Wifi,
+  user: Monitor, mobile: Monitor,
   server: Server,
-  iot: Cpu, printer: Printer, camera: Cpu,
-  voip: Monitor,
+  iot: Cpu, camera: Cpu, printer: Printer, voip: Monitor,
+  // fallbacks
+  workstation: Monitor, laptop: Monitor, client: Monitor,
   unknown: HelpCircle,
 }
 const typeColors: Record<string, string> = {
   ugw: 'text-red-500', udm: 'text-red-500', usg: 'text-red-500',
   usw: 'text-blue-500', uxg: 'text-blue-500',
   uap: 'text-green-500',
+  gateway: 'text-red-500', switch: 'text-blue-500', ap: 'text-green-500',
+  user: 'text-gray-400', mobile: 'text-violet-400',
   client: 'text-gray-400', workstation: 'text-gray-400', laptop: 'text-gray-400',
   server: 'text-purple-500',
-  iot: 'text-cyan-500', camera: 'text-cyan-500', printer: 'text-gray-400',
+  iot: 'text-cyan-500', camera: 'text-orange-400', printer: 'text-gray-400',
   voip: 'text-yellow-500',
+  unknown: 'text-gray-400',
 }
 
 type AnyDevice = (UnifiDeviceRow & { _kind: 'infra' }) | (UnifiClientRow & { _kind: 'client' })
@@ -42,7 +49,10 @@ function getColor(type: string) {
   return typeColors[t] ?? 'text-gray-400'
 }
 function deviceTypeKey(device: AnyDevice): string {
-  return device._kind === 'infra' ? device.type : device._kind
+  if (device._kind === 'infra') return device.type
+  // For clients, prefer OUI-derived category over generic 'client'
+  const cli = device as UnifiClientRow & { _kind: 'client' }
+  return cli.category ?? 'unknown'
 }
 function timeAgo(iso: string | null) {
   if (!iso) return '—'
@@ -188,8 +198,11 @@ export default function Devices() {
                                 <Icon className={`h-4 w-4 shrink-0 ${color}`} />
                                 <div>
                                   <div className="font-medium">{device.name}</div>
-                                  <div className="text-[10px] text-muted-foreground">
-                                    {device._kind === 'infra' ? (device as UnifiDeviceRow).model : (device as UnifiClientRow).oui}
+                                  <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                                    {device._kind === 'infra'
+                                      ? (device as UnifiDeviceRow).model
+                                      : (device as UnifiClientRow).oui || '—'
+                                    }
                                   </div>
                                 </div>
                               </div>

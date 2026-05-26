@@ -69,6 +69,14 @@ export async function setupCredentials(username: string, password: string): Prom
   saveStore({ username, passwordHash, jwtSecret })
 }
 
+/** Update only the password hash, preserving username and jwtSecret */
+export async function updatePassword(newPassword: string): Promise<void> {
+  const store = getAuthStore()
+  if (!store) throw new Error('NOT_SETUP')
+  const passwordHash = await bcrypt.hash(newPassword, 12)
+  saveStore({ ...store, passwordHash })
+}
+
 // ── Rate limiter ──────────────────────────────────────────────────────────────
 
 interface RateLimitEntry {

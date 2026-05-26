@@ -11,6 +11,7 @@ import cookieParser from 'cookie-parser'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
+import bcrypt from 'bcryptjs'
 import {
   setUnifiConfig, getUnifiClient, getUnifiConfig, UnifiClient,
   type UnifiConfig, type UnifiDevice, type UnifiClient as UClient,
@@ -19,7 +20,10 @@ import {
 import {
   requireAuth, handleAuthStatus, handleSetup,
   handleLogin, handleLogout, handleMe, handleBlockedIps,
+  getAuthStore, updatePassword,
 } from './auth.js'
+import { simulatePacket } from './simulate.js'
+import { lookupOui } from './oui.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -176,6 +180,11 @@ app.get('/api/unifi/clients', async (_req, res) => {
     )
 
     function toDevice(c: UClient, isActive: boolean) {
+      // Use UniFi's oui string as input; our lookup normalises and enriches it
+      const ouiInfo = lookupOui(c.mac)
+      const manufacturer = ouiInfo.manufacturer !== 'Unknown'
+        ? ouiInfo.manufacturer
+        : (c.oui ?? '')
       return {
         id: c._id,
         name: c.hostname ?? c.mac,
@@ -189,7 +198,8 @@ app.get('/api/unifi/clients', async (_req, res) => {
         rxBytes: c.rx_bytes,
         txBytes: c.tx_bytes,
         signal: c.signal,
-        oui: c.oui ?? '',
+        oui: manufacturer,
+        category: ouiInfo.category,
       }
     }
 
@@ -297,6 +307,110 @@ app.get('/api/unifi/alarms', async (_req, res) => {
     const client = getUnifiClient()
     const raw = await client.getAlarms()
     return res.json(raw)
+  } catch (e) { return apiError(res, e) }
+})
+
+// ── Firewall toggle ───────────────────────────────────────────────────────────
+// PATCH /api/unifi/firewall/:id  { enabled: boolean }
+app.patch('/api/unifi/firewall/:id', async (req, res) => {
+  const { id } = req.params
+  const { enabled } = req.body as { enabled?: unknown }
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'INVALID_BODY', message: '`enabled` (boolean) required' })
+  }
+  try {
+    const client = getUnifiClient()
+    const updated = await client.updateFirewallRule(id, { enabled })
+    return res.json({
+      id: updated._id,
+      name: updated.name,
+      enabled: updated.enabled,
+      action: updated.action,
+      protocol: updated.protocol ?? 'any',
+      srcAddress: updated.src_address ?? 'any',
+      dstAddress: updated.dst_address ?? 'any',
+      srcPort: updated.src_port ?? 'any',
+      dstPort: updated.dst_port ?? 'any',
+      ruleset: updated.ruleset,
+    })
+  } catch (e) { return apiError(res, e) }
+})
+
+// ── Simulation ────────────────────────────────────────────────────────────────
+// POST /api/simulate/packet
+app.post('/api/simulate/packet', async (req, res) => {
+  const body = req.body as Record<string, unknown>
+  const { srcIp, dstIp } = body
+  if (typeof srcIp !== 'string' || !srcIp) {
+    return res.status(400).json({ error: 'INVALID_BODY', message: '`srcIp` required' })
+  }
+  if (typeof dstIp !== 'string' || !dstIp) {
+    return res.status(400).json({ error: 'INVALID_BODY', message: '`dstIp` required' })
+  }
+  try {
+    const client = getUnifiClient()
+    const [rawRules, rawNetworks] = await Promise.all([
+      client.getFirewallRules(),
+      client.getNetworks(),
+    ])
+
+    const apiRules = rawRules.map(r => ({
+      id: r._id,
+      name: r.name,
+      enabled: r.enabled,
+      action: r.action,
+      protocol: r.protocol ?? 'any',
+      srcAddress: r.src_address ?? 'any',
+      dstAddress: r.dst_address ?? 'any',
+      srcPort: r.src_port ?? 'any',
+      dstPort: r.dst_port ?? 'any',
+      ruleset: r.ruleset,
+    }))
+
+    const apiNetworks = (rawNetworks as UnifiNetwork[]).map(n => ({
+      id: n._id,
+      name: n.name,
+      purpose: n.purpose,
+      vlan: n.vlan,
+      cidr: n.ip_subnet ?? '',
+      gateway: n.dhcpd_gateway ?? '',
+      enabled: n.enabled,
+    }))
+
+    const params = {
+      srcIp,
+      dstIp,
+      dstPort: typeof body.dstPort === 'number' ? body.dstPort : undefined,
+      proto: (body.proto as 'tcp' | 'udp' | 'icmp' | 'all' | undefined),
+      hypotheticalRules: Array.isArray(body.hypotheticalRules) ? body.hypotheticalRules : undefined,
+    }
+
+    const result = simulatePacket(params, apiRules, apiNetworks)
+    return res.json(result)
+  } catch (e) { return apiError(res, e) }
+})
+
+// ── Auth: change password ─────────────────────────────────────────────────────
+// POST /api/auth/change-password
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  const { oldPassword, newPassword } = req.body as { oldPassword?: string; newPassword?: string }
+  if (!oldPassword || !newPassword) {
+    return res.status(400).json({ error: 'MISSING_FIELDS', message: 'oldPassword und newPassword erforderlich.' })
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: 'WEAK_PASSWORD', message: 'Neues Passwort mindestens 8 Zeichen.' })
+  }
+  const store = getAuthStore()
+  if (!store) {
+    return res.status(503).json({ error: 'NOT_SETUP' })
+  }
+  const match = await bcrypt.compare(oldPassword, store.passwordHash)
+  if (!match) {
+    return res.status(401).json({ error: 'INVALID_PASSWORD', message: 'Aktuelles Passwort ist falsch.' })
+  }
+  try {
+    await updatePassword(newPassword)
+    return res.json({ ok: true })
   } catch (e) { return apiError(res, e) }
 })
 

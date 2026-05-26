@@ -84,10 +84,14 @@ export interface UnifiDeviceRow {
   lastSeen: string | null; clients: number; uptime: number
 }
 
+export type DeviceCategory = 'gateway' | 'switch' | 'ap' | 'user' | 'mobile' | 'iot' | 'camera' | 'printer' | 'server' | 'voip' | 'unknown'
+
 export interface UnifiClientRow {
   id: string; name: string; mac: string; ip: string; zone: string
   vlan?: number; status: 'online' | 'offline'; lastSeen: string | null
-  uptime: number; rxBytes: number; txBytes: number; signal?: number; oui: string
+  uptime: number; rxBytes: number; txBytes: number; signal?: number
+  oui: string           // manufacturer name (enriched via OUI DB)
+  category: DeviceCategory
 }
 
 export interface UnifiLogRow {

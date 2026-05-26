@@ -232,6 +232,13 @@ export class UnifiClient {
     return this.get('cnt/alarm')
   }
 
+  /** Toggle or partially update a firewall rule */
+  async updateFirewallRule(id: string, patch: Partial<UnifiFirewallRule>): Promise<UnifiFirewallRule> {
+    await this.ensureLoggedIn()
+    const res = await this.http.put(`/api/s/${this.site}/rest/firewallrule/${id}`, patch)
+    return (res.data?.data?.[0] ?? res.data) as UnifiFirewallRule
+  }
+
   /** Test connectivity — returns site info */
   async testConnection(): Promise<{ ok: boolean; siteName?: string; version?: string }> {
     try {

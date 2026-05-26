@@ -1,14 +1,17 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import {
   Save, Shield, Bell, Database,
   Palette, Upload, RotateCcw, Check, Sun, Moon, Lock,
+  Eye, EyeOff, RefreshCw, CheckCircle2, AlertTriangle,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useAppearanceStore, applyFont, applyFavicon, type FontChoice } from '@/lib/appearanceStore'
 import { useThemeStore } from '@/lib/themeStore'
+import { api } from '@/lib/api'
 
 // ── Coming Soon overlay ───────────────────────────────────────────────────────
 
@@ -66,6 +69,260 @@ function FontCard({
       </div>
       <div className="text-[10px] text-muted-foreground">{description}</div>
     </button>
+  )
+}
+
+// ── Admin Password Card ───────────────────────────────────────────────────────
+
+function PasswordInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+}) {
+  const [show, setShow] = useState(false)
+  return (
+    <div className="relative">
+      <Input
+        type={show ? 'text' : 'password'}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="pr-8 text-sm"
+      />
+      <button
+        type="button"
+        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+        onClick={() => setShow(v => !v)}
+        tabIndex={-1}
+      >
+        {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+      </button>
+    </div>
+  )
+}
+
+function AdminPasswordCard() {
+  const [oldPw, setOldPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [success, setSuccess] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  const canSubmit =
+    oldPw.trim().length > 0 &&
+    newPw.length >= 8 &&
+    newPw === confirmPw
+
+  const confirmMismatch = confirmPw.length > 0 && newPw !== confirmPw
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!canSubmit) return
+    setLoading(true)
+    setErrorMsg(null)
+    try {
+      await api.changePassword(oldPw, newPw)
+      setSuccess(true)
+      setOldPw('')
+      setNewPw('')
+      setConfirmPw('')
+      setTimeout(() => setSuccess(false), 3000)
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Passwort konnte nicht geändert werden')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Lock className="h-4 w-4" />
+          Administrator
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Anmeldedaten des lokalen Admin-Accounts
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-3 max-w-sm">
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">Aktuelles Passwort</label>
+            <PasswordInput value={oldPw} onChange={setOldPw} placeholder="Aktuelles Passwort" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">Neues Passwort</label>
+            <PasswordInput value={newPw} onChange={setNewPw} placeholder="Mind. 8 Zeichen" />
+            {newPw.length > 0 && newPw.length < 8 && (
+              <p className="text-[11px] text-yellow-600">Mind. 8 Zeichen erforderlich</p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">Neues Passwort bestätigen</label>
+            <PasswordInput value={confirmPw} onChange={setConfirmPw} placeholder="Passwort wiederholen" />
+            {confirmMismatch && (
+              <p className="text-[11px] text-red-500">Passwörter stimmen nicht überein</p>
+            )}
+          </div>
+
+          {errorMsg && (
+            <div className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              {errorMsg}
+            </div>
+          )}
+
+          {success && (
+            <div className="flex items-center gap-2 rounded-md border border-green-500/30 bg-green-500/10 px-3 py-2 text-xs text-green-700 dark:text-green-400">
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+              Passwort wurde geändert
+            </div>
+          )}
+
+          <Button
+            type="submit"
+            size="sm"
+            disabled={!canSubmit || loading}
+            className="w-full"
+          >
+            {loading
+              ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />Wird gespeichert…</>
+              : <><Save className="h-3.5 w-3.5" />Passwort ändern</>
+            }
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ── Blocked IPs Card ──────────────────────────────────────────────────────────
+
+interface BlockedIp {
+  ip: string
+  lockedAt: number
+  lockedUntil: number
+}
+
+function formatRelative(ms: number): string {
+  const diff = Math.abs(Date.now() - ms)
+  if (diff < 60_000) return 'gerade eben'
+  if (diff < 3_600_000) return `vor ${Math.floor(diff / 60_000)} Min`
+  if (diff < 86_400_000) return `vor ${Math.floor(diff / 3_600_000)} Std`
+  return `vor ${Math.floor(diff / 86_400_000)} Tagen`
+}
+
+function formatAbsolute(ms: number): string {
+  return new Date(ms).toLocaleString('de-DE', {
+    day: '2-digit', month: '2-digit', year: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+function BlockedIpsCard() {
+  const [loading, setLoading] = useState(false)
+  const [ips, setIps] = useState<BlockedIp[] | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  async function fetchBlockedIps() {
+    setLoading(true)
+    setErrorMsg(null)
+    try {
+      const data = await api.getBlockedIps()
+      setIps(data)
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Fehler beim Laden')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Shield className="h-4 w-4" />
+              Gesperrte IPs
+            </CardTitle>
+            <CardDescription className="text-xs mt-1">
+              Adressen die durch Rate-Limiting temporär gesperrt wurden
+            </CardDescription>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs gap-1.5"
+            onClick={fetchBlockedIps}
+            disabled={loading}
+          >
+            {loading
+              ? <RefreshCw className="h-3 w-3 animate-spin" />
+              : <RefreshCw className="h-3 w-3" />}
+            Aktualisieren
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {errorMsg && (
+          <div className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600 mb-3">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            {errorMsg}
+          </div>
+        )}
+
+        {ips === null && !loading && (
+          <p className="text-xs text-muted-foreground">Klicke auf Aktualisieren um die Liste zu laden.</p>
+        )}
+
+        {ips !== null && ips.length === 0 && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+            <CheckCircle2 className="h-4 w-4 text-green-500" />
+            Keine gesperrten IPs
+          </div>
+        )}
+
+        {ips !== null && ips.length > 0 && (
+          <div className="rounded-md border overflow-hidden">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-muted/40 border-b text-muted-foreground">
+                  <th className="px-3 py-2 text-left font-medium">IP</th>
+                  <th className="px-3 py-2 text-left font-medium">Gesperrt seit</th>
+                  <th className="px-3 py-2 text-left font-medium">Gesperrt bis</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ips.map(entry => (
+                  <tr key={entry.ip} className="border-b last:border-0">
+                    <td className="px-3 py-2 font-mono font-medium">{entry.ip}</td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      <span title={formatAbsolute(entry.lockedAt)}>{formatRelative(entry.lockedAt)}</span>
+                      <span className="ml-1 text-[10px]">({formatAbsolute(entry.lockedAt)})</span>
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      <span title={formatAbsolute(entry.lockedUntil)}>{formatRelative(entry.lockedUntil)}</span>
+                      <span className="ml-1 text-[10px]">({formatAbsolute(entry.lockedUntil)})</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <p className="text-[10px] text-muted-foreground mt-3">
+          Sperren werden beim Server-Neustart zurückgesetzt
+        </p>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -245,6 +502,12 @@ export default function Settings() {
 
             </CardContent>
           </Card>
+          {/* ── Administrator card ── */}
+          <AdminPasswordCard />
+
+          {/* ── Blocked IPs card ── */}
+          <BlockedIpsCard />
+
         </TabsContent>
 
         {/* ── Sicherheit (Coming Soon) ── */}
