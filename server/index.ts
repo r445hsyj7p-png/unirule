@@ -289,7 +289,8 @@ app.get('/api/unifi/alarms', async (_req, res) => {
 const DIST = path.join(__dirname, '..', 'dist')
 if (fs.existsSync(DIST)) {
   app.use(express.static(DIST))
-  app.get('*', (_req, res) => res.sendFile(path.join(DIST, 'index.html')))
+  // Express 5: bare '*' is rejected by path-to-regexp; use named wildcard
+  app.get('/{*splat}', (_req, res) => res.sendFile(path.join(DIST, 'index.html')))
 } else {
   app.get('/', (_req, res) => res.json({ status: 'Unirule API running', note: 'Run npm run build for UI' }))
 }

@@ -20,7 +20,7 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 
 # Copy server TypeScript sources
-# Node 22 runs .ts files natively via --experimental-strip-types
+# tsx (production dep) runs .ts + resolves .js→.ts specifiers correctly
 COPY server/ ./server/
 
 # Persistent config lives in a mounted volume at /data
@@ -32,4 +32,4 @@ ENV CONFIG_PATH=/data/config.json
 
 EXPOSE 3000
 
-CMD ["node", "--experimental-strip-types", "server/index.ts"]
+CMD ["node_modules/.bin/tsx", "server/index.ts"]

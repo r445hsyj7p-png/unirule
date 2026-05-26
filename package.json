@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "tsx server/index.ts",
-    "server:prod": "node --experimental-strip-types server/index.ts",
+    "server:prod": "tsx server/index.ts",
     "dev:full": "concurrently \"npm run dev\" \"npm run server\""
   },
   "dependencies": {
@@ -46,6 +46,7 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "tailwindcss-animate": "^1.0.7",
+    "tsx": "^4.22.3",
     "vaul": "^1.1.2",
     "zod": "^4.4.3",
     "zustand": "^5.0.13"
@@ -66,7 +67,6 @@
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.6.0",
     "tailwindcss": "^4.3.0",
-    "tsx": "^4.22.3",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
     "vite": "^8.0.12"
