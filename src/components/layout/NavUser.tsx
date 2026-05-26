@@ -2,14 +2,11 @@ import { LogOut, Settings, User } from 'lucide-react'
 import { mockUser } from '@/data/mock'
 import { useSidebar } from '@/components/ui/sidebar'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
 
 function getInitials(name: string) {
   return name.split(' ').map(n => n[0]).join('').toUpperCase()
@@ -31,7 +28,10 @@ export function NavUser() {
           {expanded && (
             <div className="flex-1 text-left min-w-0">
               <div className="text-sm font-medium text-[var(--sidebar-foreground)] truncate">{mockUser.name}</div>
-              <div className="text-[11px] text-[var(--sidebar-foreground)]/50 truncate">{mockUser.email}</div>
+              <div className="text-[10px] text-[var(--sidebar-foreground)]/50 truncate flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                {mockUser.role}
+              </div>
             </div>
           )}
         </button>
@@ -39,7 +39,10 @@ export function NavUser() {
       <DropdownMenuContent side="top" align="start" className="w-56">
         <DropdownMenuLabel className="font-normal">
           <div className="flex flex-col space-y-1">
-            <p className="text-sm font-medium">{mockUser.name}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-medium">{mockUser.name}</p>
+              <Badge variant="outline" className="text-[9px] py-0">{mockUser.role}</Badge>
+            </div>
             <p className="text-xs text-muted-foreground">{mockUser.email}</p>
           </div>
         </DropdownMenuLabel>

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Zap, CheckCircle, Clock, AlertTriangle, ChevronRight, Brain } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -22,6 +23,7 @@ const sourceLabel: Record<string, string> = {
 }
 
 export default function Policies() {
+  const navigate = useNavigate()
   const [selected, setSelected] = useState<typeof mockPolicySuggestions[0] | null>(null)
   const [approved, setApproved] = useState<Set<string>>(new Set(['p5']))
 
@@ -136,6 +138,21 @@ export default function Policies() {
               </div>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+
+      {/* Quick link to violations */}
+      <Card
+        className="border-orange-500/20 bg-orange-500/5 cursor-pointer hover:border-orange-500/40 transition-colors"
+        onClick={() => navigate('/policies/violations')}
+      >
+        <CardContent className="p-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-orange-500" />
+            <span className="text-sm font-medium text-orange-500">34 aktive Policy-Verletzungen → Details anzeigen</span>
+          </div>
+          <ChevronRight className="h-4 w-4 text-orange-500" />
         </CardContent>
       </Card>
 

@@ -10,22 +10,24 @@ import Zones from '@/pages/Zones'
 import LogExplorer from '@/pages/LogExplorer'
 import Integrations from '@/pages/Integrations'
 import Settings from '@/pages/Settings'
+import PolicyViolations from '@/pages/PolicyViolations'
 
 export const router = createBrowserRouter([
   {
     path: '/',
     element: <Layout />,
     children: [
-      { index: true, element: <Dashboard /> },
-      { path: 'network-map', element: <NetworkMap /> },
-      { path: 'threats', element: <Threats /> },
-      { path: 'policies', element: <Policies /> },
-      { path: 'rules', element: <Rules /> },
-      { path: 'devices', element: <Devices /> },
-      { path: 'zones', element: <Zones /> },
-      { path: 'logs', element: <LogExplorer /> },
-      { path: 'integrations', element: <Integrations /> },
-      { path: 'settings', element: <Settings /> },
+      { index: true,                      element: <Dashboard /> },
+      { path: 'network-map',              element: <NetworkMap /> },
+      { path: 'threats',                  element: <Threats /> },
+      { path: 'policies',                 element: <Policies /> },
+      { path: 'policies/violations',      element: <PolicyViolations /> },
+      { path: 'rules',                    element: <Rules /> },
+      { path: 'devices',                  element: <Devices /> },
+      { path: 'zones',                    element: <Zones /> },
+      { path: 'logs',                     element: <LogExplorer /> },
+      { path: 'integrations',             element: <Integrations /> },
+      { path: 'settings',                 element: <Settings /> },
     ],
   },
 ])

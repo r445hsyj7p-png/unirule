@@ -1,4 +1,5 @@
 import { Bell } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { mockNotifications } from '@/data/mock'
 import { timeAgo, severityColor } from '@/lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -6,6 +7,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 
 export function NotificationBell() {
+  const navigate = useNavigate()
   const unread = mockNotifications.filter(n => !n.read).length
 
   return (
@@ -27,9 +29,10 @@ export function NotificationBell() {
         </div>
         <ScrollArea className="h-80">
           {mockNotifications.map(n => (
-            <div
+            <button
               key={n.id}
-              className={`px-4 py-3 border-b last:border-0 hover:bg-muted/50 transition-colors ${!n.read ? 'bg-muted/20' : ''}`}
+              className={`w-full px-4 py-3 border-b last:border-0 hover:bg-muted/50 transition-colors text-left ${!n.read ? 'bg-muted/20' : ''}`}
+              onClick={() => navigate(n.href)}
             >
               <div className="flex items-start gap-2">
                 <div className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${n.read ? 'bg-muted-foreground/30' : 'bg-blue-500'}`} />
@@ -44,7 +47,7 @@ export function NotificationBell() {
                   <p className="text-[10px] text-muted-foreground/60 mt-1">{timeAgo(n.time)}</p>
                 </div>
               </div>
-            </div>
+            </button>
           ))}
         </ScrollArea>
         <div className="px-4 py-2 border-t">
