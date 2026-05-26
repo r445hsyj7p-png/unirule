@@ -1,48 +1,487 @@
-import { Plug, RefreshCw, CheckCircle, XCircle, Clock, ExternalLink } from 'lucide-react'
+import { useState } from 'react'
+import {
+  Plug, RefreshCw, CheckCircle, XCircle, Clock,
+  ExternalLink, ChevronDown, ChevronUp, Eye, EyeOff,
+  Wifi, Activity, Shield, GitBranch, BarChart2, Terminal,
+} from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { mockIntegrations } from '@/data/mock'
 import { timeAgo } from '@/lib/utils'
 
-const statusConfig: Record<string, { label: string; color: string; icon: React.ElementType }> = {
-  connected: { label: 'Verbunden', color: 'text-green-500 border-green-500/20 bg-green-500/10', icon: CheckCircle },
-  error: { label: 'Fehler', color: 'text-red-500 border-red-500/20 bg-red-500/10', icon: XCircle },
-  idle: { label: 'Bereit', color: 'text-yellow-500 border-yellow-500/20 bg-yellow-500/10', icon: Clock },
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface UnifiConfig {
+  url: string
+  username: string
+  password: string
+  site: string
+  sslVerify: boolean
+  port: string
 }
 
-const toolDocs: Record<string, { desc: string; link: string; setup: string }> = {
-  'UniFi Poller': {
-    desc: 'Sammelt Metriken aus UniFi-Controllern via API und liefert sie an InfluxDB/Prometheus.',
-    link: 'https://github.com/unifi-poller/unifi-poller',
-    setup: 'docker run -e UP_UNIFI_DEFAULT_URL=https://unifi:8443 ghcr.io/unifi-poller/unifi-poller:latest',
-  },
-  'go-unifi': {
-    desc: 'Go-Bibliothek für direkte UniFi API-Interaktion. Ermöglicht Firewall-Regel-Erstellung via API.',
-    link: 'https://github.com/paultyng/go-unifi',
-    setup: 'go get github.com/paultyng/go-unifi/unifi',
-  },
-  'Batfish': {
-    desc: 'Analysiert Netzwerkkonfigurationen (Cisco, Juniper, Palo Alto, UniFi) auf Policy-Verletzungen.',
-    link: 'https://www.batfish.org/',
-    setup: 'docker run -p 9997:9997 -p 9996:9996 batfish/batfish:latest',
-  },
-  'ntopng': {
-    desc: 'Hochperformante Traffic-Analyse mit Anomalie-Erkennung, DNS-Monitoring und Geo-IP.',
-    link: 'https://www.ntop.org/products/traffic-analysis/ntop/',
-    setup: 'apt install ntopng && ntopng -i eth0 -w 3000',
-  },
-  'Graphviz': {
-    desc: 'Generiert automatisch Netzwerk-Topologie-Diagramme aus Batfish/UniFi-Daten.',
-    link: 'https://graphviz.org/',
-    setup: 'pip install graphviz && dot -Tsvg topology.dot -o topology.svg',
-  },
-  'pyunifi': {
-    desc: 'Python-Client für UniFi Controller REST-API. Ideal für Skripting und Automatisierung.',
-    link: 'https://github.com/finish06/pyunifi',
-    setup: 'pip install pyunifi',
-  },
+interface PollerConfig {
+  controllerUrl: string
+  username: string
+  password: string
+  pollerInterval: string
+  influxUrl: string
+  prometheusPort: string
 }
+
+// ── Status badge ──────────────────────────────────────────────────────────────
+
+const statusConfig: Record<string, { label: string; color: string; icon: React.ElementType }> = {
+  connected: { label: 'Verbunden',  color: 'text-green-500 border-green-500/20 bg-green-500/10', icon: CheckCircle },
+  error:     { label: 'Fehler',     color: 'text-red-500 border-red-500/20 bg-red-500/10',       icon: XCircle    },
+  idle:      { label: 'Bereit',     color: 'text-yellow-500 border-yellow-500/20 bg-yellow-500/10', icon: Clock  },
+  testing:   { label: 'Teste…',     color: 'text-blue-500 border-blue-500/20 bg-blue-500/10',    icon: RefreshCw  },
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const cfg = statusConfig[status] ?? statusConfig.idle
+  const Icon = cfg.icon
+  return (
+    <Badge className={`text-[10px] border ${cfg.color} gap-1`}>
+      <Icon className="h-2.5 w-2.5" />
+      {cfg.label}
+    </Badge>
+  )
+}
+
+// ── Password field ────────────────────────────────────────────────────────────
+
+function PasswordInput({ value, onChange, placeholder }: {
+  value: string; onChange: (v: string) => void; placeholder?: string
+}) {
+  const [show, setShow] = useState(false)
+  return (
+    <div className="relative">
+      <Input
+        type={show ? 'text' : 'password'}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder ?? '••••••••'}
+        className="h-8 text-sm pr-9"
+      />
+      <button
+        type="button"
+        onClick={() => setShow(s => !s)}
+        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+      >
+        {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+      </button>
+    </div>
+  )
+}
+
+// ── UniFi Controller section ──────────────────────────────────────────────────
+
+function UnifiControllerSection() {
+  const [cfg, setCfg] = useState<UnifiConfig>({
+    url: 'https://192.168.1.1',
+    username: 'admin',
+    password: '',
+    site: 'default',
+    sslVerify: false,
+    port: '443',
+  })
+  const [status, setStatus] = useState<'idle' | 'testing' | 'connected' | 'error'>('idle')
+  const [testLog, setTestLog] = useState<string[]>([])
+  const [expanded, setExpanded] = useState(true)
+
+  function set(k: keyof UnifiConfig, v: string | boolean) {
+    setCfg(prev => ({ ...prev, [k]: v }))
+  }
+
+  async function testConnection() {
+    setStatus('testing')
+    setTestLog(['Verbindung wird hergestellt…'])
+    // Simulate async test steps
+    await new Promise(r => setTimeout(r, 600))
+    setTestLog(l => [...l, `→ TCP-Verbindung zu ${cfg.url}:${cfg.port} …`])
+    await new Promise(r => setTimeout(r, 500))
+    setTestLog(l => [...l, `→ TLS-Handshake ${cfg.sslVerify ? '(Zertifikat prüfen)' : '(SSL verify=off)'}…`])
+    await new Promise(r => setTimeout(r, 400))
+    setTestLog(l => [...l, `→ Login als '${cfg.username}' auf Site '${cfg.site}'…`])
+    await new Promise(r => setTimeout(r, 500))
+    // Mock: succeed if url+user filled
+    if (cfg.url && cfg.username && cfg.password) {
+      setTestLog(l => [...l, '✓ Authentifizierung erfolgreich', '✓ Site-Daten abgerufen', '✓ Verbindung hergestellt'])
+      setStatus('connected')
+    } else {
+      setTestLog(l => [...l, '✗ Fehler: Zugangsdaten unvollständig'])
+      setStatus('error')
+    }
+  }
+
+  return (
+    <Card className={status === 'connected' ? 'border-green-500/30' : status === 'error' ? 'border-red-500/30' : ''}>
+      <CardHeader
+        className="pb-3 cursor-pointer select-none"
+        onClick={() => setExpanded(e => !e)}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-muted text-2xl">🔒</div>
+            <div>
+              <CardTitle className="text-sm flex items-center gap-2">
+                UniFi Controller / UDM
+                <StatusBadge status={status} />
+              </CardTitle>
+              <CardDescription className="text-xs mt-0.5">
+                Direkte REST-API-Anbindung (Port 443 / 8443)
+              </CardDescription>
+            </div>
+          </div>
+          {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </div>
+      </CardHeader>
+
+      {expanded && (
+        <CardContent className="space-y-4">
+          {/* API-Endpunkt Info */}
+          <div className="rounded-lg bg-muted/40 border p-3 text-xs space-y-1.5">
+            <div className="font-semibold text-muted-foreground uppercase text-[10px] mb-2">Wichtige API-Endpunkte</div>
+            <div className="font-mono space-y-1 text-muted-foreground">
+              <div><span className="text-blue-400">POST</span> /api/login → Session</div>
+              <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/sta → Clients</div>
+              <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/device → Geräte</div>
+              <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/event → Events/Logs</div>
+              <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/rest/firewallrule → FW-Regeln</div>
+              <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/rest/networkconf → VLANs/Zonen</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2 md:col-span-1">
+              <label className="text-xs text-muted-foreground mb-1 block">Controller URL</label>
+              <Input value={cfg.url} onChange={e => set('url', e.target.value)} className="h-8 text-sm" placeholder="https://192.168.1.1" />
+              <p className="text-[10px] text-muted-foreground mt-1">UDM: Port 443 · Classic: Port 8443</p>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Port</label>
+              <Input value={cfg.port} onChange={e => set('port', e.target.value)} className="h-8 text-sm w-24" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Benutzername</label>
+              <Input value={cfg.username} onChange={e => set('username', e.target.value)} className="h-8 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Passwort</label>
+              <PasswordInput value={cfg.password} onChange={v => set('password', v)} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Site-Name</label>
+              <Input value={cfg.site} onChange={e => set('site', e.target.value)} className="h-8 text-sm" placeholder="default" />
+              <p className="text-[10px] text-muted-foreground mt-1">Findet sich in der Controller-URL</p>
+            </div>
+            <div className="flex items-center gap-2 pt-5">
+              <div
+                onClick={() => set('sslVerify', !cfg.sslVerify)}
+                className={`w-9 h-5 rounded-full cursor-pointer flex items-center px-0.5 transition-colors ${cfg.sslVerify ? 'bg-green-500 justify-end' : 'bg-muted justify-start'}`}
+              >
+                <div className="w-4 h-4 rounded-full bg-white shadow" />
+              </div>
+              <span className="text-xs">SSL-Zertifikat prüfen</span>
+            </div>
+          </div>
+
+          {/* Test log */}
+          {testLog.length > 0 && (
+            <div className="rounded-md bg-muted/40 border p-3 font-mono text-[11px] space-y-0.5">
+              {testLog.map((l, i) => (
+                <div key={i} className={
+                  l.startsWith('✓') ? 'text-green-400' :
+                  l.startsWith('✗') ? 'text-red-400' : 'text-muted-foreground'
+                }>{l}</div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <Button size="sm" onClick={testConnection} disabled={status === 'testing'}>
+              {status === 'testing' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wifi className="h-4 w-4" />}
+              Verbindung testen
+            </Button>
+            {status === 'connected' && (
+              <Button size="sm" variant="outline">Daten jetzt abrufen</Button>
+            )}
+            <Button size="sm" variant="ghost" asChild>
+              <a href="https://ubntwiki.com/products/software/unifi-controller/api" target="_blank" rel="noreferrer">
+                <ExternalLink className="h-4 w-4" />API-Docs
+              </a>
+            </Button>
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  )
+}
+
+// ── UniFi Poller section ──────────────────────────────────────────────────────
+
+function UnifiPollerSection() {
+  const [cfg, setCfg] = useState<PollerConfig>({
+    controllerUrl: 'https://192.168.1.1',
+    username: 'unifipoller',
+    password: '',
+    pollerInterval: '30',
+    influxUrl: 'http://influxdb:8086',
+    prometheusPort: '9130',
+  })
+  const [mode, setMode] = useState<'influx' | 'prometheus'>('prometheus')
+  const [expanded, setExpanded] = useState(false)
+
+  function set(k: keyof PollerConfig, v: string) {
+    setCfg(prev => ({ ...prev, [k]: v }))
+  }
+
+  const dockerCmd = mode === 'prometheus'
+    ? `docker run -d \\
+  -e UP_UNIFI_DEFAULT_URL=${cfg.controllerUrl} \\
+  -e UP_UNIFI_DEFAULT_USER=${cfg.username} \\
+  -e UP_UNIFI_DEFAULT_PASS=SECRET \\
+  -e UP_PROMETHEUS_DISABLE=false \\
+  -e UP_INFLUXDB_DISABLE=true \\
+  -p ${cfg.prometheusPort}:9130 \\
+  ghcr.io/unifi-poller/unifi-poller:latest`
+    : `docker run -d \\
+  -e UP_UNIFI_DEFAULT_URL=${cfg.controllerUrl} \\
+  -e UP_UNIFI_DEFAULT_USER=${cfg.username} \\
+  -e UP_UNIFI_DEFAULT_PASS=SECRET \\
+  -e UP_INFLUXDB_URL=${cfg.influxUrl} \\
+  -e UP_INFLUXDB_DB=unifi \\
+  -e UP_PROMETHEUS_DISABLE=true \\
+  ghcr.io/unifi-poller/unifi-poller:latest`
+
+  return (
+    <Card>
+      <CardHeader className="pb-3 cursor-pointer select-none" onClick={() => setExpanded(e => !e)}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-muted text-2xl">📡</div>
+            <div>
+              <CardTitle className="text-sm flex items-center gap-2">
+                UniFi Poller
+                <StatusBadge status="connected" />
+                <Badge variant="outline" className="text-[9px]">v2.0.7</Badge>
+              </CardTitle>
+              <CardDescription className="text-xs mt-0.5">
+                Metriken-Sammler → Prometheus / InfluxDB
+              </CardDescription>
+            </div>
+          </div>
+          {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </div>
+      </CardHeader>
+
+      {expanded && (
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2">
+              <label className="text-xs text-muted-foreground mb-1 block">Controller URL</label>
+              <Input value={cfg.controllerUrl} onChange={e => set('controllerUrl', e.target.value)} className="h-8 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Read-Only User</label>
+              <Input value={cfg.username} onChange={e => set('username', e.target.value)} className="h-8 text-sm" />
+              <p className="text-[10px] text-muted-foreground mt-1">Empfohlen: dedizierten Read-Only-User anlegen</p>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Passwort</label>
+              <PasswordInput value={cfg.password} onChange={v => set('password', v)} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Poll-Intervall (Sek.)</label>
+              <Input value={cfg.pollerInterval} onChange={e => set('pollerInterval', e.target.value)} className="h-8 text-sm w-24" />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-muted-foreground mb-2 block">Ausgabe-Backend</label>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setMode('prometheus')}
+                className={`px-3 py-1.5 rounded-md border text-xs font-medium transition-colors ${mode === 'prometheus' ? 'border-blue-500 text-blue-400 bg-blue-500/10' : 'border-border text-muted-foreground'}`}
+              >
+                Prometheus
+              </button>
+              <button
+                onClick={() => setMode('influx')}
+                className={`px-3 py-1.5 rounded-md border text-xs font-medium transition-colors ${mode === 'influx' ? 'border-blue-500 text-blue-400 bg-blue-500/10' : 'border-border text-muted-foreground'}`}
+              >
+                InfluxDB
+              </button>
+            </div>
+          </div>
+
+          {mode === 'prometheus' && (
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Prometheus-Port</label>
+              <Input value={cfg.prometheusPort} onChange={e => set('prometheusPort', e.target.value)} className="h-8 text-sm w-24" />
+            </div>
+          )}
+          {mode === 'influx' && (
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">InfluxDB URL</label>
+              <Input value={cfg.influxUrl} onChange={e => set('influxUrl', e.target.value)} className="h-8 text-sm" />
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs text-muted-foreground mb-2 block">Docker-Befehl (generiert)</label>
+            <pre className="bg-muted/50 border rounded-md p-3 text-[11px] font-mono whitespace-pre-wrap break-all">{dockerCmd}</pre>
+          </div>
+          <Button size="sm" variant="outline">
+            <ExternalLink className="h-4 w-4" />
+            <a href="https://github.com/unifi-poller/unifi-poller" target="_blank" rel="noreferrer">GitHub Docs</a>
+          </Button>
+        </CardContent>
+      )}
+    </Card>
+  )
+}
+
+// ── Syslog receiver section ───────────────────────────────────────────────────
+
+function SyslogSection() {
+  const [port, setPort] = useState('514')
+  const [proto, setProto] = useState('udp')
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <Card>
+      <CardHeader className="pb-3 cursor-pointer select-none" onClick={() => setExpanded(e => !e)}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-muted text-2xl">📋</div>
+            <div>
+              <CardTitle className="text-sm flex items-center gap-2">
+                Syslog-Empfänger (Remote Logging)
+                <StatusBadge status="idle" />
+              </CardTitle>
+              <CardDescription className="text-xs mt-0.5">
+                UniFi sendet Logs direkt an Unirule
+              </CardDescription>
+            </div>
+          </div>
+          {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </div>
+      </CardHeader>
+      {expanded && (
+        <CardContent className="space-y-4">
+          <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-3 text-xs">
+            <div className="font-semibold text-blue-400 mb-2">UniFi Controller einrichten</div>
+            <div className="text-muted-foreground space-y-1">
+              <div>1. UniFi Controller → <strong>Settings → System → Logging</strong></div>
+              <div>2. <strong>Remote Logging</strong> aktivieren</div>
+              <div>3. Server-IP: <code className="bg-muted px-1 rounded">IP-DIESES-SERVERS</code>, Port: <code className="bg-muted px-1 rounded">{port}</code></div>
+              <div>4. Protokoll: <code className="bg-muted px-1 rounded">{proto.toUpperCase()}</code></div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Lausch-Port</label>
+              <Input value={port} onChange={e => setPort(e.target.value)} className="h-8 text-sm w-24" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Protokoll</label>
+              <Select value={proto} onValueChange={setProto}>
+                <SelectTrigger className="h-8 text-sm w-28"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="udp">UDP (Standard)</SelectItem>
+                  <SelectItem value="tcp">TCP</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-2 block">rsyslog-Konfiguration (Server-seitig)</label>
+            <pre className="bg-muted/50 border rounded-md p-3 text-[11px] font-mono whitespace-pre-wrap">{`# /etc/rsyslog.d/unirule.conf
+module(load="im${proto}") 
+input(type="im${proto}" port="${port}")
+
+# UniFi Logs in Datei schreiben
+if $fromhost-ip startswith "192.168.1." then {
+  action(type="omfile" file="/var/log/unifi/unifi.log")
+}`}</pre>
+          </div>
+          <Button size="sm">
+            <Activity className="h-4 w-4" />
+            Empfänger starten
+          </Button>
+        </CardContent>
+      )}
+    </Card>
+  )
+}
+
+// ── Other tools compact card ──────────────────────────────────────────────────
+
+function OtherToolCard({ integration }: { integration: typeof mockIntegrations[0] }) {
+  const [expanded, setExpanded] = useState(false)
+  const status = statusConfig[integration.status] ?? statusConfig.idle
+  const StatusIcon = status.icon
+
+  const setupCmds: Record<string, string> = {
+    'Batfish':  'docker run -d -p 9997:9997 -p 9996:9996 --name batfish batfish/batfish:latest',
+    'ntopng':   'apt install ntopng && ntopng -i eth0 --http-port 3000 -d /var/lib/ntopng',
+    'Graphviz': 'apt install graphviz python3-graphviz && python3 unirule-topo-export.py | dot -Tsvg -o topo.svg',
+    'pyunifi':  'pip install pyunifi\n# Dann im Log Explorer → Datei importieren',
+  }
+
+  return (
+    <Card className={integration.status === 'error' ? 'border-red-500/30' : ''}>
+      <CardHeader className="pb-3 cursor-pointer select-none" onClick={() => setExpanded(e => !e)}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="text-2xl">{integration.icon}</div>
+            <div>
+              <CardTitle className="text-sm flex items-center gap-2">
+                {integration.name}
+                <Badge className={`text-[9px] border ${status.color}`}>
+                  <StatusIcon className="h-2.5 w-2.5 mr-0.5" />{status.label}
+                </Badge>
+                <Badge variant="outline" className="text-[9px]">v{integration.version}</Badge>
+              </CardTitle>
+              <CardDescription className="text-xs mt-0.5">
+                Letzte Sync: {timeAgo(integration.lastSync)}
+                {integration.datapoints > 0 && ` · ${integration.datapoints.toLocaleString('de')} Datenpunkte`}
+              </CardDescription>
+            </div>
+          </div>
+          {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </div>
+      </CardHeader>
+      {expanded && (
+        <CardContent className="space-y-3">
+          {setupCmds[integration.name] && (
+            <div>
+              <label className="text-[10px] text-muted-foreground uppercase mb-1.5 block">Setup</label>
+              <pre className="bg-muted/50 border rounded-md p-3 text-[11px] font-mono whitespace-pre-wrap">{setupCmds[integration.name]}</pre>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" className="h-7 text-xs">
+              <RefreshCw className="h-3 w-3" />Neu verbinden
+            </Button>
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  )
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+
+const otherTools = mockIntegrations.filter(i =>
+  !['UniFi Poller', 'go-unifi'].includes(i.name)
+)
 
 export default function Integrations() {
   const connected = mockIntegrations.filter(i => i.status === 'connected').length
@@ -52,122 +491,123 @@ export default function Integrations() {
     <div className="flex flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Integrationen</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Open-Source-Tool-Anbindung und Konfiguration</p>
+          <h1 className="text-2xl font-bold">Integrationen & Datenquellen</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            API-Anbindung, Log-Import und Open-Source-Tools
+          </p>
         </div>
-        <Button variant="outline" size="sm">
-          <RefreshCw className="h-4 w-4" />
-          Alle neu verbinden
-        </Button>
       </div>
 
-      {/* Status overview */}
+      {/* Status summary */}
       <div className="grid grid-cols-3 gap-3">
         <Card className="border-green-500/20 bg-green-500/5">
           <CardContent className="p-4 flex items-center gap-3">
             <CheckCircle className="h-6 w-6 text-green-500" />
-            <div>
-              <div className="text-xl font-bold text-green-500">{connected}</div>
-              <div className="text-xs text-muted-foreground">Verbunden</div>
-            </div>
+            <div><div className="text-xl font-bold text-green-500">{connected}</div><div className="text-xs text-muted-foreground">Verbunden</div></div>
           </CardContent>
         </Card>
         <Card className="border-red-500/20 bg-red-500/5">
           <CardContent className="p-4 flex items-center gap-3">
             <XCircle className="h-6 w-6 text-red-500" />
-            <div>
-              <div className="text-xl font-bold text-red-500">{errors}</div>
-              <div className="text-xs text-muted-foreground">Fehler</div>
-            </div>
+            <div><div className="text-xl font-bold text-red-500">{errors}</div><div className="text-xs text-muted-foreground">Fehler</div></div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4 flex items-center gap-3">
             <Plug className="h-6 w-6 text-muted-foreground" />
-            <div>
-              <div className="text-xl font-bold">{mockIntegrations.length}</div>
-              <div className="text-xs text-muted-foreground">Gesamt</div>
-            </div>
+            <div><div className="text-xl font-bold">{mockIntegrations.length}</div><div className="text-xs text-muted-foreground">Gesamt</div></div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Architecture diagram */}
-      <Card className="bg-muted/20 border-dashed">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Datenfluss-Architektur</CardTitle>
-          <CardDescription className="text-xs">Wie Open-Source-Tools Unirule mit Daten versorgen</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="font-mono text-xs text-muted-foreground leading-relaxed whitespace-pre">
-{`UniFi Controller ──┬─► UniFi Poller ──► Metriken/Geräte → Unirule Dashboard
-                   └─► go-unifi ──────► API-Kontrolle  → Policy Engine
-                   └─► pyunifi ──────► Automatisierung → Regeländerungen
+      <Tabs defaultValue="api">
+        <TabsList>
+          <TabsTrigger value="api"><Wifi className="h-3.5 w-3.5 mr-1.5" />API-Verbindungen</TabsTrigger>
+          <TabsTrigger value="syslog"><Terminal className="h-3.5 w-3.5 mr-1.5" />Syslog / Remote</TabsTrigger>
+          <TabsTrigger value="tools"><GitBranch className="h-3.5 w-3.5 mr-1.5" />Open-Source-Tools</TabsTrigger>
+          <TabsTrigger value="flow"><BarChart2 className="h-3.5 w-3.5 mr-1.5" />Datenfluss</TabsTrigger>
+        </TabsList>
 
-Netzwerk-Traffic ──► ntopng ──────────► Anomalie-Daten → Threat Engine
-                                      └► DNS-Monitoring → Log Explorer
-
-Konfigurationen ───► Batfish ─────────► Policy-Analyse → Policy Engine
-                                      └► Erreichbarkeit → Zero Trust Score
-
-Batfish + UniFi ───► Graphviz ────────► SVG-Topologie  → Netzwerkkarte`}
+        {/* API Tab */}
+        <TabsContent value="api" className="mt-4 space-y-4">
+          <div className="rounded-lg bg-muted/30 border-dashed border p-3 text-xs text-muted-foreground">
+            <Shield className="inline h-3.5 w-3.5 mr-1.5 text-yellow-500" />
+            Empfehlung: Leg für Unirule einen <strong>dedizierten Read-Only-API-Benutzer</strong> im UniFi Controller an
+            (Settings → Admins → + → Role: &quot;Read Only&quot;). Verwende niemals den Admin-Account.
           </div>
-        </CardContent>
-      </Card>
+          <UnifiControllerSection />
+          <UnifiPollerSection />
+        </TabsContent>
 
-      {/* Integration cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {mockIntegrations.map(integration => {
-          const status = statusConfig[integration.status]
-          const StatusIcon = status.icon
-          const docs = toolDocs[integration.name]
-          return (
-            <Card key={integration.id} className={integration.status === 'error' ? 'border-red-500/30' : ''}>
-              <CardContent className="p-5">
-                <div className="flex items-start gap-3">
-                  <div className="text-3xl shrink-0">{integration.icon}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <span className="font-semibold text-sm">{integration.name}</span>
-                      <Badge variant="outline" className="text-[9px]">v{integration.version}</Badge>
-                      <Badge className={`text-[9px] border ${status.color}`}>
-                        <StatusIcon className="h-2.5 w-2.5 mr-1" />
-                        {status.label}
-                      </Badge>
-                      <Badge variant="outline" className="text-[9px]">{integration.category}</Badge>
-                    </div>
-                    {docs && <p className="text-xs text-muted-foreground mb-2">{docs.desc}</p>}
-                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground mb-3">
-                      <span>Letzte Sync: {timeAgo(integration.lastSync)}</span>
-                      {integration.datapoints > 0 && (
-                        <><span>·</span><span>{integration.datapoints.toLocaleString('de')} Datenpunkte</span></>
-                      )}
-                    </div>
-                    {docs && (
-                      <div className="bg-muted/50 rounded-md p-2 mb-3">
-                        <div className="text-[9px] text-muted-foreground uppercase mb-1">Quick Setup</div>
-                        <code className="text-[10px] break-all">{docs.setup}</code>
-                      </div>
-                    )}
-                    <div className="flex gap-2">
-                      <Button size="sm" variant="outline" className="h-7 text-xs flex-1">
-                        <RefreshCw className="h-3 w-3" />
-                        Neu verbinden
-                      </Button>
-                      {docs && (
-                        <Button size="sm" variant="ghost" className="h-7 text-xs">
-                          <ExternalLink className="h-3 w-3" />
-                          Docs
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )
-        })}
-      </div>
+        {/* Syslog Tab */}
+        <TabsContent value="syslog" className="mt-4 space-y-4">
+          <SyslogSection />
+          <Card className="border-dashed">
+            <CardContent className="p-4">
+              <div className="text-sm font-medium mb-2">Log-Datei importieren</div>
+              <p className="text-xs text-muted-foreground mb-3">
+                Hast du bereits eine UniFi-Log-Datei? Importiere sie direkt im <strong>Log Explorer</strong>.
+                Unterstützt: Syslog (.log/.txt), JSON-Event-Export, CSV.
+              </p>
+              <Button size="sm" variant="outline" asChild>
+                <a href="/logs">→ Zum Log Explorer</a>
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Tools Tab */}
+        <TabsContent value="tools" className="mt-4 space-y-4">
+          {otherTools.map(tool => (
+            <OtherToolCard key={tool.id} integration={tool} />
+          ))}
+        </TabsContent>
+
+        {/* Dataflow Tab */}
+        <TabsContent value="flow" className="mt-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Datenfluss-Architektur</CardTitle>
+              <CardDescription className="text-xs">Wie alle Quellen Unirule versorgen</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <pre className="font-mono text-xs text-muted-foreground leading-loose whitespace-pre-wrap bg-muted/30 rounded-lg p-4">{`
+┌─────────────────────────────────────────────────────────────────┐
+│  DATENQUELLEN                                                    │
+├──────────────────────┬──────────────────────────────────────────┤
+│  UniFi Controller    │  → REST-API → Geräte, Clients,           │
+│  (direkte Anbindung) │            Firewall-Regeln, VLANs         │
+│                      │                                          │
+│  UniFi Poller        │  → Prometheus/InfluxDB → Metriken,       │
+│                      │    Traffic, AP-Stats, Switch-Ports        │
+│                      │                                          │
+│  Remote Syslog       │  → UDP/TCP 514 → Firewall-Logs,          │
+│  (Push vom UniFi)    │    DHCP-Events, IDS-Meldungen            │
+│                      │                                          │
+│  Log-Import (manuell)│  → Upload: Syslog / JSON / CSV           │
+│                      │                                          │
+│  ntopng              │  → Traffic-Anomalien, DNS, Flows         │
+│  Batfish             │  → Konfigurationsanalyse, Erreichbarkeit  │
+│  Graphviz            │  → Topologie-SVG                         │
+└──────────────────────┴──────────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  UNIRULE ENGINE                                                  │
+│  • Normalisierung & Korrelation aller Quellen                   │
+│  • Bedrohungserkennung (Anomalie + Signaturen)                  │
+│  • Zero-Trust-Scoring (Batfish + Policy Engine)                 │
+│  • Policy-Vorschläge (ML + Regelwerk)                           │
+└─────────────────────────────────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  UNIRULE UI                                                      │
+│  Dashboard · Netzwerkkarte · Threats · Policies · Log Explorer  │
+└─────────────────────────────────────────────────────────────────┘
+`}</pre>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
