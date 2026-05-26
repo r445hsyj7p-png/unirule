@@ -2,6 +2,7 @@
  * Frontend API client
  * All requests go to /api/* which the backend proxies to UniFi.
  */
+import { useConnectionStore } from '@/lib/store'
 
 export class ApiError extends Error {
   status: number
@@ -17,7 +18,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...options,
   })
   const body = await res.json().catch(() => ({ error: res.statusText }))
-  if (!res.ok) throw new ApiError(res.status, body.message ?? body.error ?? res.statusText)
+  if (!res.ok) {
+    // Fix 6: if the server lost its in-memory config (e.g. restart without volume),
+    // clear the persisted "configured" flag so the UI shows the reconnect prompt.
+    if (res.status === 503 && body.error === 'NOT_CONFIGURED') {
+      useConnectionStore.getState().setDisconnected()
+    }
+    throw new ApiError(res.status, body.message ?? body.error ?? res.statusText)
+  }
   return body as T
 }
 

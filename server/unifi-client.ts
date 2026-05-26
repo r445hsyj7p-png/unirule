@@ -114,6 +114,23 @@ export class UnifiClient {
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' },
     })
+
+    // Fix 3: re-authenticate automatically when session cookie expires (401)
+    this.http.interceptors.response.use(
+      res => res,
+      async (err) => {
+        if (err.response?.status === 401 && this.loggedIn) {
+          this.loggedIn = false
+          try {
+            await this.login()
+            return this.http.request(err.config)
+          } catch {
+            // re-login failed — propagate original error
+          }
+        }
+        throw err
+      },
+    )
   }
 
   private get site() { return this.config.site || 'default' }

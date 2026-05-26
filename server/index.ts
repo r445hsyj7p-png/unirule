@@ -11,7 +11,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import {
-  setUnifiConfig, getUnifiClient, getUnifiConfig,
+  setUnifiConfig, getUnifiClient, getUnifiConfig, UnifiClient,
   type UnifiConfig, type UnifiDevice, type UnifiClient as UClient,
   type UnifiEvent, type UnifiNetwork,
 } from './unifi-client.js'
@@ -21,7 +21,10 @@ const app = express()
 const PORT = process.env.PORT ?? 3000
 
 // ── Middleware ────────────────────────────────────────────────────────────────
-app.use(cors({ origin: true, credentials: true }))
+// Fix 1: restrict CORS — same-origin in production (frontend served by this server),
+// allow Vite dev server only in development.
+const devOrigin = process.env.NODE_ENV !== 'production' ? 'http://localhost:5173' : false
+app.use(cors({ origin: devOrigin, credentials: !!devOrigin }))
 app.use(express.json())
 
 // Persistent config in /data/config.json (mounted volume in production)
@@ -44,7 +47,8 @@ function saveConfig(cfg: UnifiConfig) {
   try {
     const dir = path.dirname(CONFIG_PATH)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2))
+    // Fix 9: restrict file to owner-only (password stored in plaintext)
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 })
   } catch (e) {
     console.warn('[config] Could not persist config:', e)
   }
@@ -78,22 +82,32 @@ app.post('/api/config', async (req, res) => {
   if (!cfg.url || !cfg.username || !cfg.password) {
     return res.status(400).json({ error: 'url, username, password required' })
   }
-  setUnifiConfig(cfg)
-  const client = getUnifiClient()
-  const test = await client.testConnection()
-  if (!test.ok) {
-    return res.status(502).json({ error: 'Connection failed', detail: test.version })
+  // Fix 2: test with a temporary client BEFORE overwriting the live singleton,
+  // so a failed re-config never destroys a working connection.
+  try {
+    const tmp = new UnifiClient(cfg)
+    const test = await tmp.testConnection()
+    if (!test.ok) {
+      return res.status(502).json({ error: 'Connection failed', detail: test.version })
+    }
+    setUnifiConfig(cfg)
+    saveConfig(cfg)
+    return res.json({ ok: true, site: test.siteName, version: test.version })
+  } catch (e) {
+    return apiError(res, e)
   }
-  saveConfig(cfg)
-  return res.json({ ok: true, site: test.siteName, version: test.version })
 })
 
 app.post('/api/config/test', async (req, res) => {
-  const cfg = req.body as UnifiConfig
-  const { UnifiClient: UC } = await import('./unifi-client.js')
-  const tmp = new (UC as unknown as { new(c: UnifiConfig): { testConnection(): Promise<{ok:boolean;siteName?:string;version?:string}> } })(cfg)
-  const result = await tmp.testConnection()
-  return res.json(result)
+  // Fix 4: wrap in try/catch so network errors return JSON instead of hanging
+  try {
+    const cfg = req.body as UnifiConfig
+    const tmp = new UnifiClient(cfg)
+    const result = await tmp.testConnection()
+    return res.json(result)
+  } catch (e) {
+    return apiError(res, e)
+  }
 })
 
 app.delete('/api/config', (_req, res) => {
@@ -136,7 +150,13 @@ app.get('/api/unifi/clients', async (_req, res) => {
       client.getAllClients().catch(() => [] as UClient[]),
       client.getNetworks(),
     ])
-    const netMap = new Map(networks.map((n: UnifiNetwork) => [n.vlan?.toString(), n.name]))
+    // Fix 8: skip networks without a VLAN id to avoid all undefined-VLAN
+    // entries collapsing onto the same "undefined" key in the Map.
+    const netMap = new Map(
+      networks
+        .filter((n: UnifiNetwork) => n.vlan != null)
+        .map((n: UnifiNetwork) => [String(n.vlan), n.name]),
+    )
 
     function toDevice(c: UClient, isActive: boolean) {
       return {
@@ -172,7 +192,8 @@ app.get('/api/unifi/clients', async (_req, res) => {
 app.get('/api/unifi/events', async (req, res) => {
   try {
     const client = getUnifiClient()
-    const limit = Math.min(Number(req.query.limit ?? 500), 5000)
+    // Fix 7: parseInt with radix + fallback prevents NaN reaching the UniFi URL
+    const limit = Math.min(parseInt(String(req.query.limit ?? '500'), 10) || 500, 5000)
     const raw = await client.getEvents(limit)
 
     const logs = raw.map((e: UnifiEvent) => {

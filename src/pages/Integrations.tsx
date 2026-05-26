@@ -101,8 +101,18 @@ function UnifiControllerSection() {
   }
 
   function buildPayload() {
+    // Fix 5: merge the separate port field into the URL so users who set
+    // port=8443 for a classic controller actually connect to the right port.
+    let url = cfg.url.trim().replace(/\/$/, '')
+    if (cfg.port) {
+      try {
+        const u = new URL(url)
+        if (!u.port) u.port = cfg.port
+        url = u.origin  // scheme + host + port, no trailing slash
+      } catch { /* invalid URL — leave as-is, server will report the error */ }
+    }
     return {
-      url: cfg.url,
+      url,
       username: cfg.username,
       password: cfg.password,
       site: cfg.site,
