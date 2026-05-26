@@ -1,0 +1,223 @@
+import { useState } from 'react'
+import { Zap, CheckCircle, Clock, AlertTriangle, ChevronRight, Brain } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { mockPolicySuggestions } from '@/data/mock'
+import { severityBg } from '@/lib/utils'
+
+const effortLabel: Record<string, string> = { low: 'Gering', medium: 'Mittel', high: 'Hoch' }
+const effortColor: Record<string, string> = {
+  low: 'text-green-500 bg-green-500/10 border-green-500/20',
+  medium: 'text-yellow-500 bg-yellow-500/10 border-yellow-500/20',
+  high: 'text-red-500 bg-red-500/10 border-red-500/20',
+}
+
+const sourceLabel: Record<string, string> = {
+  'batfish-analyse': '🐟 Batfish',
+  'policy-engine': '⚡ Policy Engine',
+  'ntopng-scan': '📊 ntopng',
+}
+
+export default function Policies() {
+  const [selected, setSelected] = useState<typeof mockPolicySuggestions[0] | null>(null)
+  const [approved, setApproved] = useState<Set<string>>(new Set(['p5']))
+
+  const pending = mockPolicySuggestions.filter(p => p.status === 'pending')
+  const inReview = mockPolicySuggestions.filter(p => p.status === 'in_review')
+  const approvedList = mockPolicySuggestions.filter(p => approved.has(p.id) || p.status === 'approved')
+
+  function approve(id: string) {
+    setApproved(prev => new Set([...prev, id]))
+    setSelected(null)
+  }
+
+  function PolicyCard({ policy }: { policy: typeof mockPolicySuggestions[0] }) {
+    return (
+      <Card
+        className="cursor-pointer hover:border-foreground/20 transition-colors"
+        onClick={() => setSelected(policy)}
+      >
+        <CardContent className="p-4">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                <Badge className={`${severityBg(policy.impact)} border text-[10px] uppercase`}>
+                  {policy.impact}
+                </Badge>
+                <Badge className={`border text-[10px] ${effortColor[policy.effort]}`}>
+                  Aufwand: {effortLabel[policy.effort]}
+                </Badge>
+                <Badge variant="outline" className="text-[10px]">{policy.category}</Badge>
+              </div>
+              <h3 className="text-sm font-semibold">{policy.title}</h3>
+              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{policy.description}</p>
+              <div className="flex items-center gap-3 mt-2">
+                <span className="text-[10px] text-muted-foreground">
+                  {sourceLabel[policy.source] || policy.source}
+                </span>
+                <div className="flex gap-1">
+                  {policy.affectedZones.map(z => (
+                    <Badge key={z} variant="outline" className="text-[9px] py-0">{z}</Badge>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 mt-1" />
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-6 p-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Policy Engine</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">KI-gestützte Zero-Trust-Empfehlungen</p>
+        </div>
+        <Button size="sm">
+          <Brain className="h-4 w-4" />
+          Neue Analyse starten
+        </Button>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-3">
+        <Card className="border-yellow-500/20 bg-yellow-500/5">
+          <CardContent className="p-4 flex items-center gap-3">
+            <Clock className="h-6 w-6 text-yellow-500" />
+            <div>
+              <div className="text-xl font-bold text-yellow-500">{pending.length}</div>
+              <div className="text-xs text-muted-foreground">Ausstehend</div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-blue-500/20 bg-blue-500/5">
+          <CardContent className="p-4 flex items-center gap-3">
+            <AlertTriangle className="h-6 w-6 text-blue-500" />
+            <div>
+              <div className="text-xl font-bold text-blue-500">{inReview.length}</div>
+              <div className="text-xs text-muted-foreground">In Prüfung</div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-green-500/20 bg-green-500/5">
+          <CardContent className="p-4 flex items-center gap-3">
+            <CheckCircle className="h-6 w-6 text-green-500" />
+            <div>
+              <div className="text-xl font-bold text-green-500">{approvedList.length}</div>
+              <div className="text-xs text-muted-foreground">Genehmigt</div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Analysis sources info */}
+      <Card className="bg-muted/30 border-dashed">
+        <CardContent className="p-4">
+          <div className="flex items-start gap-3">
+            <Brain className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
+            <div>
+              <div className="text-sm font-medium">Analyse-Quellen</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Empfehlungen werden aus <strong>Batfish</strong>-Konfigurationsanalysen,
+                <strong> ntopng</strong>-Traffic-Auswertungen und der internen Policy Engine generiert.
+                Batfish prüft Netzwerkkonfigurationen auf Erreichbarkeitspfade und Policy-Lücken.
+                ntopng liefert Anomalie-Erkennungen aus dem Live-Traffic.
+              </p>
+              <div className="flex gap-2 mt-2">
+                <Badge variant="outline" className="text-[10px]">🐟 Batfish v2024.01</Badge>
+                <Badge variant="outline" className="text-[10px]">📊 ntopng v6.2</Badge>
+                <Badge variant="outline" className="text-[10px]">⚡ Policy Engine v1.0</Badge>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Tabs defaultValue="pending">
+        <TabsList>
+          <TabsTrigger value="pending">Ausstehend ({pending.length})</TabsTrigger>
+          <TabsTrigger value="review">In Prüfung ({inReview.length})</TabsTrigger>
+          <TabsTrigger value="approved">Genehmigt ({approvedList.length})</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="pending" className="mt-4 space-y-3">
+          {pending.map(p => <PolicyCard key={p.id} policy={p} />)}
+        </TabsContent>
+
+        <TabsContent value="review" className="mt-4 space-y-3">
+          {inReview.map(p => <PolicyCard key={p.id} policy={p} />)}
+        </TabsContent>
+
+        <TabsContent value="approved" className="mt-4 space-y-3">
+          {approvedList.map(p => (
+            <Card key={p.id} className="border-green-500/20 bg-green-500/5">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <CheckCircle className="h-4 w-4 text-green-500" />
+                      <span className="text-sm font-medium">{p.title}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{p.category} · {sourceLabel[p.source]}</p>
+                  </div>
+                  <Button size="sm" variant="outline" className="text-xs h-7">Rollback</Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </TabsContent>
+      </Tabs>
+
+      {/* Detail dialog */}
+      <Dialog open={!!selected} onOpenChange={() => setSelected(null)}>
+        <DialogContent className="max-w-xl">
+          {selected && (
+            <>
+              <DialogHeader>
+                <div className="flex gap-2 mb-1">
+                  <Badge className={`${severityBg(selected.impact)} border text-[10px] uppercase`}>{selected.impact}</Badge>
+                  <Badge className={`border text-[10px] ${effortColor[selected.effort]}`}>Aufwand: {effortLabel[selected.effort]}</Badge>
+                </div>
+                <DialogTitle>{selected.title}</DialogTitle>
+                <DialogDescription>{selected.description}</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 mt-2">
+                <div>
+                  <div className="text-xs text-muted-foreground uppercase mb-1.5">Begründung</div>
+                  <div className="bg-muted/50 rounded-lg p-3 text-sm">{selected.reasoning}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground uppercase mb-1.5">Vorgeschlagene Regel</div>
+                  <div className="bg-muted/50 rounded-lg p-3 font-mono text-xs border">{selected.suggestedRule}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground uppercase mb-1.5">Betroffene Zonen</div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {selected.affectedZones.map(z => (
+                      <Badge key={z} variant="outline">{z}</Badge>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <Button className="flex-1" onClick={() => approve(selected.id)}>
+                    <CheckCircle className="h-4 w-4" />
+                    Genehmigen & Anwenden
+                  </Button>
+                  <Button variant="outline" className="flex-1" onClick={() => setSelected(null)}>
+                    Ablehnen
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
