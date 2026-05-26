@@ -1,11 +1,94 @@
-import { Settings as SettingsIcon, Save, Shield, Bell, Database, Palette } from 'lucide-react'
+import { useRef } from 'react'
+import { Settings as SettingsIcon, Save, Shield, Bell, Database, Palette, Upload, RotateCcw, Check } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { useAppearanceStore, applyFont, applyFavicon, type FontChoice } from '@/lib/appearanceStore'
+
+// ── Font option card ──────────────────────────────────────────────────────────
+
+function FontCard({
+  id, label, preview, mono, description, selected, onSelect,
+}: {
+  id: FontChoice; label: string; preview: string; mono: string
+  description: string; selected: boolean; onSelect: () => void
+}) {
+  return (
+    <button
+      onClick={onSelect}
+      className={`relative rounded-lg border p-4 text-left w-full transition-all ${
+        selected
+          ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
+          : 'border-border hover:border-foreground/30'
+      }`}
+    >
+      {selected && (
+        <span className="absolute top-2 right-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary">
+          <Check className="h-3 w-3 text-primary-foreground" />
+        </span>
+      )}
+      <div
+        className="text-lg font-semibold leading-tight mb-1"
+        style={{ fontFamily: id === 'geist' ? 'Geist, sans-serif' : "'Open Sans', sans-serif" }}
+      >
+        {label}
+      </div>
+      <div
+        className="text-xs text-muted-foreground mb-2"
+        style={{ fontFamily: id === 'geist' ? "'Geist Mono', monospace" : "'Open Sans', sans-serif" }}
+      >
+        {mono}
+      </div>
+      <div
+        className="text-sm text-foreground/80 mb-2"
+        style={{ fontFamily: id === 'geist' ? 'Geist, sans-serif' : "'Open Sans', sans-serif" }}
+      >
+        {preview}
+      </div>
+      <div className="text-[10px] text-muted-foreground">{description}</div>
+    </button>
+  )
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Settings() {
+  const { font, faviconDataUrl, setFont, setFavicon } = useAppearanceStore()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  function handleFontSelect(f: FontChoice) {
+    setFont(f)
+    applyFont(f)
+  }
+
+  function handleFaviconUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (file.size > 512 * 1024) {
+      alert('Datei zu groß — maximal 512 KB')
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result as string
+      setFavicon(dataUrl)
+      applyFavicon(dataUrl)
+    }
+    reader.readAsDataURL(file)
+
+    // reset input so the same file can be re-selected
+    e.target.value = ''
+  }
+
+  function resetFavicon() {
+    setFavicon(null)
+    applyFavicon(null)
+  }
+
   return (
     <div className="flex flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
@@ -24,11 +107,20 @@ export default function Settings() {
         </TabsList>
 
         <TabsContent value="general" className="mt-4 space-y-4">
+          {/* ── Appearance ── */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm flex items-center gap-2"><Palette className="h-4 w-4" />Erscheinungsbild</CardTitle>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Palette className="h-4 w-4" />
+                Erscheinungsbild
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Schriftart und Favicon werden im Browser gespeichert und sofort angewendet.
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-6">
+
+              {/* Dark mode (read-only indicator) */}
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-sm font-medium">Dark Mode</div>
@@ -36,15 +128,90 @@ export default function Settings() {
                 </div>
                 <Badge variant="outline" className="text-green-500 border-green-500/30">Aktiv</Badge>
               </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium">Schriftart</div>
-                  <div className="text-xs text-muted-foreground font-mono">Geist + Geist Mono</div>
+
+              {/* Font selector */}
+              <div>
+                <div className="text-sm font-medium mb-1">Schriftart</div>
+                <div className="text-xs text-muted-foreground mb-3">
+                  Wird sofort angewendet — keine Seite neu laden nötig.
                 </div>
-                <Badge variant="outline">Standard</Badge>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <FontCard
+                    id="geist"
+                    label="Geist"
+                    preview="Security Dashboard — Echtzeit-Übersicht"
+                    mono="fn analyze() → ThreatLevel"
+                    description="Vercel · Sans + Mono · Standard"
+                    selected={font === 'geist'}
+                    onSelect={() => handleFontSelect('geist')}
+                  />
+                  <FontCard
+                    id="opensans"
+                    label="Open Sans"
+                    preview="Security Dashboard — Echtzeit-Übersicht"
+                    mono="Netzwerk · Firewall · Policies"
+                    description="Google · Variable · Humanistisch"
+                    selected={font === 'opensans'}
+                    onSelect={() => handleFontSelect('opensans')}
+                  />
+                </div>
               </div>
+
+              {/* Favicon */}
+              <div>
+                <div className="text-sm font-medium mb-1">Favicon</div>
+                <div className="text-xs text-muted-foreground mb-3">
+                  PNG, SVG oder ICO · max. 512 KB · wird im Browser-Tab und Lesezeichen angezeigt.
+                </div>
+                <div className="flex items-center gap-4">
+                  {/* Current favicon preview */}
+                  <div className="w-14 h-14 rounded-lg border bg-muted flex items-center justify-center overflow-hidden shrink-0">
+                    <img
+                      src={faviconDataUrl ?? '/favicon.svg'}
+                      alt="Aktuelles Favicon"
+                      className="w-10 h-10 object-contain"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/png,image/svg+xml,image/x-icon,image/jpeg,image/webp"
+                      className="sr-only"
+                      onChange={handleFaviconUpload}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs gap-1.5"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      Bild hochladen
+                    </Button>
+                    {faviconDataUrl && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-8 text-xs gap-1.5 text-muted-foreground"
+                        onClick={resetFavicon}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        Standard wiederherstellen
+                      </Button>
+                    )}
+                    {!faviconDataUrl && (
+                      <span className="text-[10px] text-muted-foreground">Standard-Favicon aktiv</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
             </CardContent>
           </Card>
+
+          {/* ── Workspace ── */}
           <Card>
             <CardHeader>
               <CardTitle className="text-sm">Workspace</CardTitle>
@@ -66,7 +233,10 @@ export default function Settings() {
         <TabsContent value="security" className="mt-4 space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm flex items-center gap-2"><Shield className="h-4 w-4" />Zero Trust Konfiguration</CardTitle>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Shield className="h-4 w-4" />
+                Zero Trust Konfiguration
+              </CardTitle>
               <CardDescription className="text-xs">Parameter für die Policy Engine</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -94,7 +264,10 @@ export default function Settings() {
         <TabsContent value="notifications" className="mt-4 space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm flex items-center gap-2"><Bell className="h-4 w-4" />Alert-Schwellwerte</CardTitle>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Bell className="h-4 w-4" />
+                Alert-Schwellwerte
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               {[
@@ -120,7 +293,10 @@ export default function Settings() {
         <TabsContent value="data" className="mt-4 space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm flex items-center gap-2"><Database className="h-4 w-4" />Datenhaltung</CardTitle>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Database className="h-4 w-4" />
+                Datenhaltung
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <div>
