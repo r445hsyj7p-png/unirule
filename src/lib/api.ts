@@ -53,6 +53,27 @@ export const api = {
   getNetworks: () => request<UnifiNetworkRow[]>('/api/unifi/networks'),
   getHealth:   () => request<UnifiHealthRow[]>('/api/unifi/health'),
   getAlarms:   () => request<unknown[]>('/api/unifi/alarms'),
+
+  toggleFirewallRule: (id: string, enabled: boolean) =>
+    request<UnifiRuleRow>(`/api/unifi/firewall/${id}`, {
+      method: 'PATCH', body: JSON.stringify({ enabled }),
+    }),
+
+  simulatePacket: (params: SimulateParams) =>
+    request<SimulationResult>('/api/simulate/packet', {
+      method: 'POST', body: JSON.stringify(params),
+    }),
+
+  changePassword: (oldPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>('/api/auth/change-password', {
+      method: 'POST', body: JSON.stringify({ oldPassword, newPassword }),
+      credentials: 'include',
+    }),
+
+  getBlockedIps: () =>
+    request<Array<{ ip: string; lockedAt: number; lockedUntil: number }>>('/api/auth/blocked-ips', {
+      credentials: 'include',
+    }),
 }
 
 // ── Response types (matches server normalisation) ─────────────────────────────
@@ -88,4 +109,31 @@ export interface UnifiNetworkRow {
 export interface UnifiHealthRow {
   subsystem: string; status: string; num_user?: number
   tx_bytes_r?: number; rx_bytes_r?: number
+}
+
+// ── Simulation types ──────────────────────────────────────────────────────────
+
+export interface SimulateParams {
+  srcIp: string
+  dstIp: string
+  dstPort?: number
+  proto?: 'tcp' | 'udp' | 'icmp' | 'all'
+  hypotheticalRules?: Array<{ id: string; enabled?: boolean }>
+}
+
+export interface TraceEntry {
+  ruleId: string
+  ruleName: string
+  isImplicit: boolean
+  implicitSource?: string
+  action: 'match' | 'skip' | 'skip-disabled'
+  skipReason?: string
+}
+
+export interface SimulationResult {
+  verdict: 'ALLOW' | 'DROP' | 'REJECT' | 'UNCERTAIN'
+  matchedRule: { id: string; name: string; isImplicit: boolean; implicitSource?: string } | null
+  trace: TraceEntry[]
+  defaultAction: 'DROP'
+  caveats: string[]
 }
