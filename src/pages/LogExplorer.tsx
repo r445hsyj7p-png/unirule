@@ -11,7 +11,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { mockLogs } from '@/data/mock'
+import { useEvents } from '@/hooks/useUnifi'
+import { useConnectionStore } from '@/lib/store'
+import { UnifiLogRow } from '@/lib/api'
+import { DataState } from '@/components/ui/empty-state'
 
 const levelColors: Record<string, string> = {
   critical: 'text-red-500 bg-red-500/10 border-red-500/20',
@@ -321,7 +324,11 @@ function ImportDialog({ open, onClose, onImport }: ImportDialogProps) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-type LogEntry = typeof mockLogs[0] | ParsedLog
+type LogEntry = UnifiLogRow | ParsedLog
+
+function getLogTime(log: LogEntry): Date {
+  return log.timestamp instanceof Date ? log.timestamp : new Date(log.timestamp)
+}
 
 export default function LogExplorer() {
   const [search, setSearch] = useState('')
@@ -332,7 +339,11 @@ export default function LogExplorer() {
   const [importedLogs, setImportedLogs] = useState<ParsedLog[]>([])
   const [importBanner, setImportBanner] = useState('')
 
-  const allLogs: LogEntry[] = [...importedLogs, ...mockLogs]
+  const configured = useConnectionStore(s => s.configured)
+  const eventsQ = useEvents(2000)
+  const apiLogs: UnifiLogRow[] = eventsQ.data ?? []
+
+  const allLogs: LogEntry[] = [...importedLogs, ...apiLogs]
   const sources = [...new Set(allLogs.map(l => l.source))]
 
   function handleImport(logs: ParsedLog[], filename: string) {
@@ -364,7 +375,7 @@ export default function LogExplorer() {
           <h1 className="text-2xl font-bold">Log Explorer</h1>
           <p className="text-muted-foreground text-sm mt-0.5">
             {importedLogs.length > 0
-              ? `${importedLogs.length} importierte + ${mockLogs.length} Live-Einträge`
+              ? `${importedLogs.length} importierte + ${apiLogs.length} Live-Einträge`
               : 'Echtzeit-Logs aus allen Quellen'}
           </p>
         </div>
@@ -487,6 +498,16 @@ export default function LogExplorer() {
         </div>
       </div>
 
+      {/* Not configured notice */}
+      {!configured && (
+        <DataState notConfigured />
+      )}
+
+      {/* Empty live logs notice */}
+      {configured && apiLogs.length === 0 && !eventsQ.isLoading && importedLogs.length === 0 && (
+        <DataState empty emptyText="Keine Live-Logs verfügbar" />
+      )}
+
       {/* Log display */}
       {viewMode === 'structured' ? (
         <Card>
@@ -506,13 +527,15 @@ export default function LogExplorer() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-mono text-[10px] text-muted-foreground shrink-0">
-                          {log.timestamp.toLocaleTimeString('de-DE')}
+                          {getLogTime(log).toLocaleTimeString('de-DE')}
                         </span>
                         {'raw' in log && (
                           <Badge variant="outline" className="text-[8px] text-blue-400 border-blue-400/30 py-0">importiert</Badge>
                         )}
                         <Badge variant="outline" className="text-[9px] font-mono">{log.source}</Badge>
-                        <Badge variant="outline" className="text-[9px]">{log.zone}</Badge>
+                        {'zone' in log && log.zone && (
+                          <Badge variant="outline" className="text-[9px]">{log.zone}</Badge>
+                        )}
                         <span className="text-[9px] text-muted-foreground">{log.device}</span>
                       </div>
                       <p className="font-mono text-xs mt-1 leading-relaxed break-all">{log.message}</p>
@@ -540,7 +563,7 @@ export default function LogExplorer() {
             <ScrollArea className="h-[600px]">
               <pre className="p-4 font-mono text-xs leading-relaxed">
                 {filtered.map(log =>
-                  `${log.timestamp.toISOString()} [${log.level.toUpperCase().padEnd(8)}] ${log.source.padEnd(15)} ${log.device.padEnd(20)} ${log.message}\n`
+                  `${getLogTime(log).toISOString()} [${log.level.toUpperCase().padEnd(8)}] ${log.source.padEnd(15)} ${log.device.padEnd(20)} ${log.message}\n`
                 ).join('')}
               </pre>
             </ScrollArea>

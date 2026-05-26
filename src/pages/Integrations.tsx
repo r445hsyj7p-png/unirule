@@ -2,7 +2,7 @@ import { useState } from 'react'
 import {
   Plug, RefreshCw, CheckCircle, XCircle, Clock,
   ExternalLink, ChevronDown, ChevronUp, Eye, EyeOff,
-  Wifi, Activity, Shield, GitBranch, BarChart2, Terminal,
+  Wifi, Activity, Shield, GitBranch, BarChart2, Terminal, Network,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -10,8 +10,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { mockIntegrations } from '@/data/mock'
 import { timeAgo } from '@/lib/utils'
+import { api } from '@/lib/api'
+import { useConnectionStore } from '@/lib/store'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -93,28 +94,61 @@ function UnifiControllerSection() {
   const [status, setStatus] = useState<'idle' | 'testing' | 'connected' | 'error'>('idle')
   const [testLog, setTestLog] = useState<string[]>([])
   const [expanded, setExpanded] = useState(true)
+  const setConnected = useConnectionStore(s => s.setConnected)
 
   function set(k: keyof UnifiConfig, v: string | boolean) {
     setCfg(prev => ({ ...prev, [k]: v }))
   }
 
+  function buildPayload() {
+    return {
+      url: cfg.url,
+      username: cfg.username,
+      password: cfg.password,
+      site: cfg.site,
+      verifySsl: cfg.sslVerify,
+    }
+  }
+
   async function testConnection() {
     setStatus('testing')
     setTestLog(['Verbindung wird hergestellt…'])
-    // Simulate async test steps
-    await new Promise(r => setTimeout(r, 600))
-    setTestLog(l => [...l, `→ TCP-Verbindung zu ${cfg.url}:${cfg.port} …`])
-    await new Promise(r => setTimeout(r, 500))
-    setTestLog(l => [...l, `→ TLS-Handshake ${cfg.sslVerify ? '(Zertifikat prüfen)' : '(SSL verify=off)'}…`])
-    await new Promise(r => setTimeout(r, 400))
-    setTestLog(l => [...l, `→ Login als '${cfg.username}' auf Site '${cfg.site}'…`])
-    await new Promise(r => setTimeout(r, 500))
-    // Mock: succeed if url+user filled
-    if (cfg.url && cfg.username && cfg.password) {
-      setTestLog(l => [...l, '✓ Authentifizierung erfolgreich', '✓ Site-Daten abgerufen', '✓ Verbindung hergestellt'])
-      setStatus('connected')
-    } else {
-      setTestLog(l => [...l, '✗ Fehler: Zugangsdaten unvollständig'])
+    setTestLog(l => [...l, `→ Teste Verbindung zu ${cfg.url} …`])
+    try {
+      const result = await api.testConfig(buildPayload())
+      if (result.ok) {
+        setTestLog(l => [...l,
+          `→ Login als '${cfg.username}' auf Site '${result.siteName ?? cfg.site}'…`,
+          '✓ Authentifizierung erfolgreich',
+          result.version ? `✓ Controller-Version: ${result.version}` : '✓ Verbindung hergestellt',
+        ])
+        setStatus('connected')
+      } else {
+        setTestLog(l => [...l, '✗ Fehler: Controller hat Verbindung abgelehnt'])
+        setStatus('error')
+      }
+    } catch (err) {
+      setTestLog(l => [...l, `✗ Fehler: ${err instanceof Error ? err.message : String(err)}`])
+      setStatus('error')
+    }
+  }
+
+  async function saveConnection() {
+    setStatus('testing')
+    setTestLog(['Speichere Konfiguration…'])
+    try {
+      const result = await api.saveConfig(buildPayload())
+      if (result.ok) {
+        const site = result.site ?? cfg.site
+        setConnected(cfg.url, cfg.username, site)
+        setTestLog(l => [...l, '✓ Konfiguration gespeichert', '✓ Verbunden'])
+        setStatus('connected')
+      } else {
+        setTestLog(l => [...l, '✗ Fehler: Konnte Konfiguration nicht speichern'])
+        setStatus('error')
+      }
+    } catch (err) {
+      setTestLog(l => [...l, `✗ Fehler: ${err instanceof Error ? err.message : String(err)}`])
       setStatus('error')
     }
   }
@@ -203,14 +237,15 @@ function UnifiControllerSection() {
             </div>
           )}
 
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button size="sm" onClick={testConnection} disabled={status === 'testing'}>
               {status === 'testing' ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wifi className="h-4 w-4" />}
               Verbindung testen
             </Button>
-            {status === 'connected' && (
-              <Button size="sm" variant="outline">Daten jetzt abrufen</Button>
-            )}
+            <Button size="sm" variant="outline" onClick={saveConnection} disabled={status === 'testing'}>
+              <CheckCircle className="h-4 w-4" />
+              Verbinden &amp; Speichern
+            </Button>
             <Button size="sm" variant="ghost" asChild>
               <a href="https://ubntwiki.com/products/software/unifi-controller/api" target="_blank" rel="noreferrer">
                 <ExternalLink className="h-4 w-4" />API-Docs
@@ -421,12 +456,79 @@ if $fromhost-ip startswith "192.168.1." then {
   )
 }
 
+// ── Other tools static data ───────────────────────────────────────────────────
+
+interface OtherIntegration {
+  id: string
+  name: string
+  description: string
+  status: 'idle' | 'connected' | 'error'
+  lastSync: string | null
+  icon: React.ElementType
+  docsUrl: string
+  tags: string[]
+}
+
+const OTHER_INTEGRATIONS: OtherIntegration[] = [
+  {
+    id: 'unifi-poller',
+    name: 'UniFi Poller',
+    description: 'Metriken-Export via Prometheus / InfluxDB',
+    status: 'idle',
+    lastSync: null,
+    icon: BarChart2,
+    docsUrl: 'https://github.com/unpoller/unpoller',
+    tags: ['metrics', 'prometheus', 'influxdb'],
+  },
+  {
+    id: 'batfish',
+    name: 'Batfish',
+    description: 'Netzwerk-Konfigurationsanalyse & Verifikation',
+    status: 'idle',
+    lastSync: null,
+    icon: GitBranch,
+    docsUrl: 'https://batfish.org',
+    tags: ['analysis', 'config'],
+  },
+  {
+    id: 'ntopng',
+    name: 'ntopng',
+    description: 'Traffic-Analyse und Flow-Monitoring',
+    status: 'idle',
+    lastSync: null,
+    icon: Activity,
+    docsUrl: 'https://www.ntop.org',
+    tags: ['traffic', 'flows'],
+  },
+  {
+    id: 'graphviz',
+    name: 'Graphviz',
+    description: 'Netzwerktopologie-Visualisierung',
+    status: 'idle',
+    lastSync: null,
+    icon: Network,
+    docsUrl: 'https://graphviz.org',
+    tags: ['visualization'],
+  },
+  {
+    id: 'pyunifi',
+    name: 'pyunifi',
+    description: 'Python-Bibliothek für UniFi Controller API',
+    status: 'idle',
+    lastSync: null,
+    icon: Terminal,
+    docsUrl: 'https://github.com/finish06/pyunifi',
+    tags: ['python', 'api'],
+  },
+]
+
 // ── Other tools compact card ──────────────────────────────────────────────────
 
-function OtherToolCard({ integration }: { integration: typeof mockIntegrations[0] }) {
+function OtherToolCard({ integration }: { integration: OtherIntegration }) {
   const [expanded, setExpanded] = useState(false)
   const status = statusConfig[integration.status] ?? statusConfig.idle
   const StatusIcon = status.icon
+  const Icon = integration.icon
 
   const setupCmds: Record<string, string> = {
     'Batfish':  'docker run -d -p 9997:9997 -p 9996:9996 --name batfish batfish/batfish:latest',
@@ -440,18 +542,17 @@ function OtherToolCard({ integration }: { integration: typeof mockIntegrations[0
       <CardHeader className="pb-3 cursor-pointer select-none" onClick={() => setExpanded(e => !e)}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="text-2xl">{integration.icon}</div>
+            <div className="p-2 rounded-lg bg-muted"><Icon className="h-5 w-5 text-muted-foreground" /></div>
             <div>
               <CardTitle className="text-sm flex items-center gap-2">
                 {integration.name}
                 <Badge className={`text-[9px] border ${status.color}`}>
                   <StatusIcon className="h-2.5 w-2.5 mr-0.5" />{status.label}
                 </Badge>
-                <Badge variant="outline" className="text-[9px]">v{integration.version}</Badge>
               </CardTitle>
               <CardDescription className="text-xs mt-0.5">
-                Letzte Sync: {timeAgo(integration.lastSync)}
-                {integration.datapoints > 0 && ` · ${integration.datapoints.toLocaleString('de')} Datenpunkte`}
+                {integration.description}
+                {integration.lastSync && ` · Letzte Sync: ${timeAgo(integration.lastSync)}`}
               </CardDescription>
             </div>
           </div>
@@ -470,6 +571,11 @@ function OtherToolCard({ integration }: { integration: typeof mockIntegrations[0
             <Button size="sm" variant="outline" className="h-7 text-xs">
               <RefreshCw className="h-3 w-3" />Neu verbinden
             </Button>
+            <Button size="sm" variant="ghost" asChild className="h-7 text-xs">
+              <a href={integration.docsUrl} target="_blank" rel="noreferrer">
+                <ExternalLink className="h-3 w-3" />Docs
+              </a>
+            </Button>
           </div>
         </CardContent>
       )}
@@ -479,13 +585,13 @@ function OtherToolCard({ integration }: { integration: typeof mockIntegrations[0
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-const otherTools = mockIntegrations.filter(i =>
-  !['UniFi Poller', 'go-unifi'].includes(i.name)
+const otherTools = OTHER_INTEGRATIONS.filter(i =>
+  !['unifi', 'unifi-controller'].includes(i.id)
 )
 
 export default function Integrations() {
-  const connected = mockIntegrations.filter(i => i.status === 'connected').length
-  const errors = mockIntegrations.filter(i => i.status === 'error').length
+  const connected = OTHER_INTEGRATIONS.filter(i => i.status === 'connected').length
+  const errors = OTHER_INTEGRATIONS.filter(i => i.status === 'error').length
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -515,7 +621,7 @@ export default function Integrations() {
         <Card>
           <CardContent className="p-4 flex items-center gap-3">
             <Plug className="h-6 w-6 text-muted-foreground" />
-            <div><div className="text-xl font-bold">{mockIntegrations.length}</div><div className="text-xs text-muted-foreground">Gesamt</div></div>
+            <div><div className="text-xl font-bold">{OTHER_INTEGRATIONS.length + 1}</div><div className="text-xs text-muted-foreground">Gesamt</div></div>
           </CardContent>
         </Card>
       </div>
