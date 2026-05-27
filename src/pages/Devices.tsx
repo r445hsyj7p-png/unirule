@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Server, Wifi, Monitor, Printer, Cpu, HelpCircle, Shield, AlertTriangle, Search, RefreshCw, ShieldAlert, StickyNote } from 'lucide-react'
+import { useState } from 'react'
+import { Server, Wifi, Monitor, Printer, Cpu, HelpCircle, Shield, Search, RefreshCw, ShieldAlert } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -315,9 +315,6 @@ export default function Devices() {
   const isLoading = devQ.isLoading || cliQ.isLoading
   const isError = devQ.isError || cliQ.isError
   const errorMsg = (devQ.error as Error)?.message ?? (cliQ.error as Error)?.message
-
-  // suppress unused warning — useMemo used in KnownDevicesTab
-  void useMemo
 
   return (
     <div className="flex flex-col gap-6 p-6">
