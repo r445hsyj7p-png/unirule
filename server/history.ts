@@ -310,7 +310,9 @@ export function handleGetKnownDevices(req: express.Request, res: express.Respons
 export function handleUpdateKnownDevice(req: express.Request, res: express.Response) {
   try {
     const db  = getDb()
-    const mac = String((req.params as Record<string, string>).mac ?? '').toLowerCase()
+    const mac = String((req.params as Record<string, string>).mac ?? '')
+      .toLowerCase()
+      .replace(/-/g, ':')   // normalise hyphen separators to colons (UniFi stores colons)
     if (!mac) return res.status(400).json({ error: 'mac required' })
 
     const body    = req.body as Record<string, unknown>
@@ -322,6 +324,12 @@ export function handleUpdateKnownDevice(req: express.Request, res: express.Respo
     if (body.category !== undefined) allowed['category'] = String(body.category ?? '').slice(0, 50)
 
     if (Object.keys(allowed).length === 0) return res.status(400).json({ error: 'No valid fields' })
+
+    // Hard allowlist — prevents SQL injection if the guard above is ever loosened
+    const SAFE_COLS = new Set(['name', 'notes', 'trusted', 'flagged', 'category'])
+    for (const k of Object.keys(allowed)) {
+      if (!SAFE_COLS.has(k)) return res.status(400).json({ error: `Invalid field: ${k}` })
+    }
 
     const sets   = Object.keys(allowed).map(k => `${k} = ?`).join(', ')
     const values = Object.values(allowed)
@@ -394,12 +402,14 @@ export function handlePurgeData(_req: express.Request, res: express.Response) {
     const metricsMs   = getSettingInt('metrics_retention_days',   90) * 86_400_000
     const snapshotsMs = getSettingInt('snapshots_retention_days', 14) * 86_400_000
 
-    const eventsDeleted      = db.prepare('DELETE FROM events           WHERE timestamp   < ?').run(now - eventsMs   ).changes
-    const metricsDeleted     = db.prepare('DELETE FROM metrics           WHERE bucket      < ?').run(now - metricsMs  ).changes
-    const clientSnapsDeleted = db.prepare('DELETE FROM client_snapshots  WHERE captured_at < ?').run(now - snapshotsMs).changes
-    const deviceSnapsDeleted = db.prepare('DELETE FROM device_snapshots  WHERE captured_at < ?').run(now - snapshotsMs).changes
-    // Prune already-read notifications older than 7 days
-    const notifDeleted       = db.prepare('DELETE FROM notifications WHERE read = 1 AND created_at < ?').run(now - 7 * 86_400_000).changes
+    const { eventsDeleted, metricsDeleted, clientSnapsDeleted, deviceSnapsDeleted, notifDeleted } =
+      db.transaction(() => ({
+        eventsDeleted:      db.prepare('DELETE FROM events           WHERE timestamp   < ?').run(now - eventsMs   ).changes,
+        metricsDeleted:     db.prepare('DELETE FROM metrics           WHERE bucket      < ?').run(now - metricsMs  ).changes,
+        clientSnapsDeleted: db.prepare('DELETE FROM client_snapshots  WHERE captured_at < ?').run(now - snapshotsMs).changes,
+        deviceSnapsDeleted: db.prepare('DELETE FROM device_snapshots  WHERE captured_at < ?').run(now - snapshotsMs).changes,
+        notifDeleted:       db.prepare('DELETE FROM notifications WHERE read = 1 AND created_at < ?').run(now - 7 * 86_400_000).changes,
+      }))()
 
     db.pragma('wal_checkpoint(TRUNCATE)')
 
@@ -430,8 +440,8 @@ export function handleExportEventsCsv(req: express.Request, res: express.Respons
     const params: (string | number)[] = []
     if (level)  { sql += ' AND level = ?';  params.push(level) }
     if (search) { sql += ' AND (message LIKE ? OR device LIKE ? OR ip LIKE ?)'; params.push(`%${search}%`, `%${search}%`, `%${search}%`) }
-    if (from)   { sql += ' AND timestamp >= ?'; params.push(from) }
-    if (to)     { sql += ' AND timestamp <= ?'; params.push(to)   }
+    if (from !== null) { sql += ' AND timestamp >= ?'; params.push(from) }
+    if (to   !== null) { sql += ' AND timestamp <= ?'; params.push(to)   }
     sql += ' ORDER BY timestamp DESC LIMIT ?'
     params.push(limit)
 
