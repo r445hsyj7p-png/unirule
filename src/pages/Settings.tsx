@@ -8,7 +8,6 @@ import {
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
@@ -20,19 +19,29 @@ import { useQueryClient, useMutation } from '@tanstack/react-query'
 import { formatBytes } from '@/lib/utils'
 import type { AuditLogEntry, PurgeResult, SecuritySettings, NotificationSettings } from '@/lib/api'
 
-// ── Coming Soon overlay ───────────────────────────────────────────────────────
+// ── Module-scope constants for Phase 4 tabs ───────────────────────────────────
 
-function ComingSoonOverlay() {
-  return (
-    <div className="absolute inset-0 rounded-lg bg-background/60 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 z-10">
-      <Badge variant="outline" className="text-xs gap-1.5 px-3 py-1">
-        <Lock className="h-3 w-3" />
-        Coming Soon — Phase 4
-      </Badge>
-      <p className="text-xs text-muted-foreground">Wird in einem kommenden Update implementiert</p>
-    </div>
-  )
+const SECURITY_DEFAULTS: SecuritySettings = {
+  defaultDeny: true, lateralMovement: true, autoPolicySuggestions: true, iotQuarantine: false,
 }
+
+const SECURITY_ITEMS: Array<{ key: keyof SecuritySettings; label: string; desc: string }> = [
+  { key: 'defaultDeny',           label: 'Default Deny Modus',             desc: 'Alle nicht explizit erlaubten Verbindungen blockieren' },
+  { key: 'lateralMovement',       label: 'Lateral Movement Detection',     desc: 'Anomaler East-West-Traffic wird als Bedrohung gemeldet' },
+  { key: 'autoPolicySuggestions', label: 'Automatische Policy-Vorschläge', desc: 'Analyse der Konfigurationsänderungen' },
+  { key: 'iotQuarantine',         label: 'IoT-Quarantäne bei Anomalie',    desc: 'IoT-Geräte werden bei Verdacht automatisch isoliert' },
+]
+
+const NOTIFICATION_DEFAULTS: NotificationSettings = {
+  criticalImmediate: true, dailyDigest: true, newDevices: false, policyApprovals: true,
+}
+
+const NOTIFICATION_ITEMS: Array<{ key: keyof NotificationSettings; label: string; desc: string }> = [
+  { key: 'criticalImmediate', label: 'Kritische Alerts sofort',     desc: 'E-Mail + Push bei severity=critical' },
+  { key: 'dailyDigest',       label: 'Tägliche Zusammenfassung',    desc: '08:00 Uhr — alle offenen Alerts' },
+  { key: 'newDevices',        label: 'Neue Geräte im Netzwerk',     desc: 'Benachrichtigung bei unbekannten MAC-Adressen' },
+  { key: 'policyApprovals',   label: 'Policy-Genehmigungsanfragen', desc: 'Wenn neue Empfehlungen verfügbar sind' },
+]
 
 // ── Font option card ──────────────────────────────────────────────────────────
 
@@ -757,57 +766,85 @@ function ToggleSwitch({ checked, onChange }: { checked: boolean; onChange: (v: b
   )
 }
 
-// ── Security (Phase 4) ────────────────────────────────────────────────────────
+// ── Generic boolean-settings tab (Phase 4) ───────────────────────────────────
 
-function SecurityTab() {
-  const qc    = useQueryClient()
-  const secQ  = useSecuritySettings()
+/**
+ * Reusable card that renders a list of boolean toggles backed by a TanStack
+ * Query hook + mutation.  Fixes:
+ *   • Save button disabled when the GET query errored (prevents mutating DEFAULTS)
+ *   • setTimeout ID stored in a ref and cleared on unmount / re-trigger
+ */
+function SettingsToggleTab<T extends { [K in keyof T]: boolean }>({
+  data,
+  isLoading,
+  isError,
+  mutationFn,
+  queryKey,
+  defaults,
+  items,
+  title,
+  titleIcon,
+  description,
+  successMsg,
+}: {
+  data:        T | undefined
+  isLoading:   boolean
+  isError:     boolean
+  mutationFn:  (s: Partial<T>) => Promise<{ ok: boolean }>
+  queryKey:    unknown[]
+  defaults:    T
+  items:       Array<{ key: keyof T & string; label: string; desc: string }>
+  title:       string
+  titleIcon:   React.ReactNode
+  description: string
+  successMsg:  string
+}) {
+  const qc       = useQueryClient()
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const DEFAULTS: SecuritySettings = {
-    defaultDeny: true, lateralMovement: true, autoPolicySuggestions: true, iotQuarantine: false,
-  }
-
-  const [local,   setLocal]   = useState<SecuritySettings | null>(null)
+  const [local,   setLocal]   = useState<T | null>(null)
   const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null)
 
+  // Initialise local state once data arrives
   useEffect(() => {
-    if (secQ.data && local === null) setLocal(secQ.data)
-  }, [secQ.data])
+    if (data && local === null) setLocal(data)
+  }, [data])
 
-  const current = local ?? secQ.data ?? DEFAULTS
+  // Clear any pending banner timer on unmount
+  useEffect(() => {
+    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
+  }, [])
 
-  function toggle(key: keyof SecuritySettings) {
-    setLocal(prev => ({ ...(prev ?? current), [key]: !(prev ?? current)[key] }))
+  const current = local ?? data ?? defaults
+
+  function toggle(key: keyof T) {
+    setLocal(prev => ({ ...(prev ?? current), [key]: !(prev ?? current)[key] } as T))
   }
 
   const saveMut = useMutation({
-    mutationFn: api.updateSecuritySettings,
+    mutationFn,
     onSuccess: () => {
-      setSaveMsg({ text: 'Konfiguration gespeichert', ok: true })
-      qc.invalidateQueries({ queryKey: ['settings', 'security'] })
-      setTimeout(() => setSaveMsg(null), 3000)
+      setSaveMsg({ text: successMsg, ok: true })
+      qc.invalidateQueries({ queryKey })
+      if (timerRef.current) clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => setSaveMsg(null), 3000)
     },
-    onError: (err) => setSaveMsg({ text: err instanceof Error ? err.message : 'Fehler beim Speichern', ok: false }),
+    onError: (err) => setSaveMsg({
+      text: err instanceof Error ? err.message : 'Fehler beim Speichern', ok: false,
+    }),
   })
-
-  const items: { key: keyof SecuritySettings; label: string; desc: string }[] = [
-    { key: 'defaultDeny',           label: 'Default Deny Modus',           desc: 'Alle nicht explizit erlaubten Verbindungen blockieren' },
-    { key: 'lateralMovement',       label: 'Lateral Movement Detection',   desc: 'Anomaler East-West-Traffic wird als Bedrohung gemeldet' },
-    { key: 'autoPolicySuggestions', label: 'Automatische Policy-Vorschläge', desc: 'Analyse der Konfigurationsänderungen' },
-    { key: 'iotQuarantine',         label: 'IoT-Quarantäne bei Anomalie',  desc: 'IoT-Geräte werden bei Verdacht automatisch isoliert' },
-  ]
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-sm flex items-center gap-2">
-          <Shield className="h-4 w-4" />
-          Zero Trust Konfiguration
+          {titleIcon}
+          {title}
         </CardTitle>
-        <CardDescription className="text-xs">Parameter für die Policy Engine · Änderungen werden im Audit-Log protokolliert</CardDescription>
+        <CardDescription className="text-xs">{description}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
-        {secQ.isLoading && (
+        {isLoading && (
           <p className="text-xs text-muted-foreground flex items-center gap-1.5">
             <RefreshCw className="h-3 w-3 animate-spin" />Einstellungen werden geladen…
           </p>
@@ -838,7 +875,7 @@ function SecurityTab() {
         <Button
           size="sm"
           onClick={() => saveMut.mutate(current)}
-          disabled={saveMut.isPending || secQ.isLoading}
+          disabled={saveMut.isPending || isLoading || isError}
         >
           {saveMut.isPending
             ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />Wird gespeichert…</>
@@ -849,95 +886,41 @@ function SecurityTab() {
   )
 }
 
-// ── Notifications (Phase 4) ───────────────────────────────────────────────────
+// ── Security tab (Phase 4) ────────────────────────────────────────────────────
+
+function SecurityTab() {
+  const { data, isLoading, isError } = useSecuritySettings()
+  return (
+    <SettingsToggleTab<SecuritySettings>
+      data={data} isLoading={isLoading} isError={isError}
+      mutationFn={api.updateSecuritySettings}
+      queryKey={['settings', 'security']}
+      defaults={SECURITY_DEFAULTS}
+      items={SECURITY_ITEMS}
+      title="Zero Trust Konfiguration"
+      titleIcon={<Shield className="h-4 w-4" />}
+      description="Parameter für die Policy Engine · Änderungen werden im Audit-Log protokolliert"
+      successMsg="Konfiguration gespeichert"
+    />
+  )
+}
+
+// ── Notifications tab (Phase 4) ───────────────────────────────────────────────
 
 function NotificationsTab() {
-  const qc      = useQueryClient()
-  const notifQ  = useNotificationSettings()
-
-  const DEFAULTS: NotificationSettings = {
-    criticalImmediate: true, dailyDigest: true, newDevices: false, policyApprovals: true,
-  }
-
-  const [local,   setLocal]   = useState<NotificationSettings | null>(null)
-  const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null)
-
-  useEffect(() => {
-    if (notifQ.data && local === null) setLocal(notifQ.data)
-  }, [notifQ.data])
-
-  const current = local ?? notifQ.data ?? DEFAULTS
-
-  function toggle(key: keyof NotificationSettings) {
-    setLocal(prev => ({ ...(prev ?? current), [key]: !(prev ?? current)[key] }))
-  }
-
-  const saveMut = useMutation({
-    mutationFn: api.updateNotificationSettings,
-    onSuccess: () => {
-      setSaveMsg({ text: 'Benachrichtigungen gespeichert', ok: true })
-      qc.invalidateQueries({ queryKey: ['settings', 'notifications'] })
-      setTimeout(() => setSaveMsg(null), 3000)
-    },
-    onError: (err) => setSaveMsg({ text: err instanceof Error ? err.message : 'Fehler beim Speichern', ok: false }),
-  })
-
-  const items: { key: keyof NotificationSettings; label: string; desc: string }[] = [
-    { key: 'criticalImmediate', label: 'Kritische Alerts sofort',       desc: 'E-Mail + Push bei severity=critical' },
-    { key: 'dailyDigest',       label: 'Tägliche Zusammenfassung',      desc: '08:00 Uhr — alle offenen Alerts' },
-    { key: 'newDevices',        label: 'Neue Geräte im Netzwerk',       desc: 'Benachrichtigung bei unbekannten MAC-Adressen' },
-    { key: 'policyApprovals',   label: 'Policy-Genehmigungsanfragen',   desc: 'Wenn neue Empfehlungen verfügbar sind' },
-  ]
-
+  const { data, isLoading, isError } = useNotificationSettings()
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-sm flex items-center gap-2">
-          <Bell className="h-4 w-4" />
-          Alert-Schwellwerte
-        </CardTitle>
-        <CardDescription className="text-xs">Steuerung wann und wie du benachrichtigt wirst</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-5">
-        {notifQ.isLoading && (
-          <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-            <RefreshCw className="h-3 w-3 animate-spin" />Einstellungen werden geladen…
-          </p>
-        )}
-        {items.map(({ key, label, desc }) => (
-          <div key={key} className="flex items-center justify-between gap-4">
-            <div>
-              <div className="text-sm font-medium">{label}</div>
-              <div className="text-xs text-muted-foreground">{desc}</div>
-            </div>
-            <ToggleSwitch checked={current[key]} onChange={() => toggle(key)} />
-          </div>
-        ))}
-
-        {saveMsg && (
-          <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-xs ${
-            saveMsg.ok
-              ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400'
-              : 'border-red-500/30 bg-red-500/10 text-red-600'
-          }`}>
-            {saveMsg.ok
-              ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-              : <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
-            {saveMsg.text}
-          </div>
-        )}
-
-        <Button
-          size="sm"
-          onClick={() => saveMut.mutate(current)}
-          disabled={saveMut.isPending || notifQ.isLoading}
-        >
-          {saveMut.isPending
-            ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />Wird gespeichert…</>
-            : <><Save className="h-4 w-4" />Einstellungen speichern</>}
-        </Button>
-      </CardContent>
-    </Card>
+    <SettingsToggleTab<NotificationSettings>
+      data={data} isLoading={isLoading} isError={isError}
+      mutationFn={api.updateNotificationSettings}
+      queryKey={['settings', 'notifications']}
+      defaults={NOTIFICATION_DEFAULTS}
+      items={NOTIFICATION_ITEMS}
+      title="Alert-Schwellwerte"
+      titleIcon={<Bell className="h-4 w-4" />}
+      description="Steuerung wann und wie du benachrichtigt wirst"
+      successMsg="Benachrichtigungen gespeichert"
+    />
   )
 }
 

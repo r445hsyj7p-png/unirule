@@ -3,7 +3,7 @@
  * All routes are registered in server/index.ts under requireAuth middleware.
  */
 import type express from 'express'
-import { getDb, getSetting, getSettingInt, DB_PATH } from './db.js'
+import { getDb, getSettingInt, DB_PATH } from './db.js'
 import fs from 'node:fs'
 
 // ── Events history ────────────────────────────────────────────────────────────
@@ -253,91 +253,116 @@ export function writeAuditLog(opts: {
   } catch { /* non-fatal */ }
 }
 
+// ── Phase 4 shared helpers ────────────────────────────────────────────────────
+
+/** Maps frontend field name → { DB key, seed default ('0'|'1') } */
+type BoolFieldMap = Record<string, { dbKey: string; default: '0' | '1' }>
+
+/** Returns a GET handler that reads all fields in a single SELECT WHERE key IN (...). */
+function makeGetBoolSettings(defs: BoolFieldMap) {
+  return function(_req: express.Request, res: express.Response) {
+    try {
+      const db   = getDb()
+      const keys = Object.values(defs).map(d => d.dbKey)
+      const rows = db.prepare(
+        `SELECT key, value FROM settings WHERE key IN (${keys.map(() => '?').join(',')})`
+      ).all(...keys) as Array<{ key: string; value: string }>
+      const stored: Record<string, string> = {}
+      for (const row of rows) stored[row.key] = row.value
+      const result: Record<string, boolean> = {}
+      for (const [field, { dbKey, default: def }] of Object.entries(defs)) {
+        result[field] = (stored[dbKey] ?? def) === '1'
+      }
+      return res.json(result)
+    } catch (e) {
+      return res.status(500).json({ error: String(e) })
+    }
+  }
+}
+
+/**
+ * Returns a PUT handler that:
+ * - Validates each value as a strict boolean (true/1 → '1', anything else → '0')
+ * - Skips the audit log entirely when no fields were provided
+ * - Records oldValue from the DB so the audit log shows what actually changed
+ * - Logs only the fields that were actually written (not the raw request body)
+ */
+function makeUpdateBoolSettings(defs: BoolFieldMap, auditAction: string) {
+  return function(req: express.Request, res: express.Response) {
+    try {
+      const db   = getDb()
+      const body = req.body as Record<string, unknown>
+
+      // Collect only the known fields that are present in the body
+      const toUpdate: Array<{ field: string; dbKey: string; val: '0' | '1' }> = []
+      for (const [field, { dbKey }] of Object.entries(defs)) {
+        if (body[field] === undefined) continue
+        // Strict boolean check — rejects string "false" etc.
+        toUpdate.push({ field, dbKey, val: (body[field] === true || body[field] === 1) ? '1' : '0' })
+      }
+
+      // Nothing to do — return early without a ghost audit entry
+      if (toUpdate.length === 0) return res.json({ ok: true })
+
+      // Snapshot old values before writing (for audit log)
+      const oldKeys = toUpdate.map(t => t.dbKey)
+      const oldRows = db.prepare(
+        `SELECT key, value FROM settings WHERE key IN (${oldKeys.map(() => '?').join(',')})`
+      ).all(...oldKeys) as Array<{ key: string; value: string }>
+      const oldStored: Record<string, string> = {}
+      for (const row of oldRows) oldStored[row.key] = row.value
+
+      const upsert = db.prepare(
+        'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ' +
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+      )
+      const now = Date.now()
+      db.transaction(() => {
+        for (const { dbKey, val } of toUpdate) upsert.run(dbKey, val, now)
+      })()
+
+      // Audit: only the touched fields, with before/after values
+      const oldAudit: Record<string, boolean> = {}
+      const newAudit: Record<string, boolean> = {}
+      for (const { field, dbKey, val } of toUpdate) {
+        oldAudit[field] = (oldStored[dbKey] ?? defs[field].default) === '1'
+        newAudit[field] = val === '1'
+      }
+      writeAuditLog({
+        action: auditAction, entityType: 'settings',
+        oldValue: JSON.stringify(oldAudit),
+        newValue: JSON.stringify(newAudit),
+      })
+      return res.json({ ok: true })
+    } catch (e) {
+      return res.status(500).json({ error: String(e) })
+    }
+  }
+}
+
 // ── Phase 4: Security settings ────────────────────────────────────────────────
 
-export function handleGetSecuritySettings(_req: express.Request, res: express.Response) {
-  try {
-    return res.json({
-      defaultDeny:           getSetting('sec_default_deny',         '1') === '1',
-      lateralMovement:       getSetting('sec_lateral_movement',     '1') === '1',
-      autoPolicySuggestions: getSetting('sec_auto_policy',          '1') === '1',
-      iotQuarantine:         getSetting('sec_iot_quarantine',       '0') === '1',
-    })
-  } catch (e) {
-    return res.status(500).json({ error: String(e) })
-  }
+const SECURITY_FIELDS: BoolFieldMap = {
+  defaultDeny:           { dbKey: 'sec_default_deny',         default: '1' },
+  lateralMovement:       { dbKey: 'sec_lateral_movement',     default: '1' },
+  autoPolicySuggestions: { dbKey: 'sec_auto_policy',          default: '1' },
+  iotQuarantine:         { dbKey: 'sec_iot_quarantine',       default: '0' },
 }
 
-export function handleUpdateSecuritySettings(req: express.Request, res: express.Response) {
-  try {
-    const db   = getDb()
-    const body = req.body as Record<string, unknown>
-    const map: Record<string, string> = {
-      defaultDeny:           'sec_default_deny',
-      lateralMovement:       'sec_lateral_movement',
-      autoPolicySuggestions: 'sec_auto_policy',
-      iotQuarantine:         'sec_iot_quarantine',
-    }
-    const upsert = db.prepare(
-      'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ' +
-      'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
-    )
-    const now = Date.now()
-    db.transaction(() => {
-      for (const [field, dbKey] of Object.entries(map)) {
-        if (body[field] !== undefined) upsert.run(dbKey, body[field] ? '1' : '0', now)
-      }
-    })()
-    writeAuditLog({ action: 'security_update', entityType: 'settings',
-      newValue: JSON.stringify(body) })
-    return res.json({ ok: true })
-  } catch (e) {
-    return res.status(500).json({ error: String(e) })
-  }
-}
+export const handleGetSecuritySettings    = makeGetBoolSettings(SECURITY_FIELDS)
+export const handleUpdateSecuritySettings = makeUpdateBoolSettings(SECURITY_FIELDS, 'security_update')
 
 // ── Phase 4: Notification settings ────────────────────────────────────────────
 
-export function handleGetNotificationSettings(_req: express.Request, res: express.Response) {
-  try {
-    return res.json({
-      criticalImmediate: getSetting('notif_critical_immediate', '1') === '1',
-      dailyDigest:       getSetting('notif_daily_digest',       '1') === '1',
-      newDevices:        getSetting('notif_new_devices',        '0') === '1',
-      policyApprovals:   getSetting('notif_policy_approvals',   '1') === '1',
-    })
-  } catch (e) {
-    return res.status(500).json({ error: String(e) })
-  }
+const NOTIF_FIELDS: BoolFieldMap = {
+  criticalImmediate: { dbKey: 'notif_critical_immediate', default: '1' },
+  dailyDigest:       { dbKey: 'notif_daily_digest',       default: '1' },
+  newDevices:        { dbKey: 'notif_new_devices',        default: '0' },
+  policyApprovals:   { dbKey: 'notif_policy_approvals',   default: '1' },
 }
 
-export function handleUpdateNotificationSettings(req: express.Request, res: express.Response) {
-  try {
-    const db   = getDb()
-    const body = req.body as Record<string, unknown>
-    const map: Record<string, string> = {
-      criticalImmediate: 'notif_critical_immediate',
-      dailyDigest:       'notif_daily_digest',
-      newDevices:        'notif_new_devices',
-      policyApprovals:   'notif_policy_approvals',
-    }
-    const upsert = db.prepare(
-      'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ' +
-      'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
-    )
-    const now = Date.now()
-    db.transaction(() => {
-      for (const [field, dbKey] of Object.entries(map)) {
-        if (body[field] !== undefined) upsert.run(dbKey, body[field] ? '1' : '0', now)
-      }
-    })()
-    writeAuditLog({ action: 'notifications_update', entityType: 'settings',
-      newValue: JSON.stringify(body) })
-    return res.json({ ok: true })
-  } catch (e) {
-    return res.status(500).json({ error: String(e) })
-  }
-}
+export const handleGetNotificationSettings    = makeGetBoolSettings(NOTIF_FIELDS)
+export const handleUpdateNotificationSettings = makeUpdateBoolSettings(NOTIF_FIELDS, 'notifications_update')
 
 // ── Known devices ─────────────────────────────────────────────────────────────
 
