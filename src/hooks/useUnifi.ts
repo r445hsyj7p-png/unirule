@@ -237,6 +237,24 @@ export function useAppSettings() {
   })
 }
 
+// ── Phase 4: Security + Notification settings ─────────────────────────────────
+
+export function useSecuritySettings() {
+  return useQuery({
+    queryKey: ['settings', 'security'],
+    queryFn:  api.getSecuritySettings,
+    staleTime: 60_000,
+  })
+}
+
+export function useNotificationSettings() {
+  return useQuery({
+    queryKey: ['settings', 'notifications'],
+    queryFn:  api.getNotificationSettings,
+    staleTime: 60_000,
+  })
+}
+
 // ── Derived: dashboard metrics ────────────────────────────────────────────────
 
 export function useMetrics() {

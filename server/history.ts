@@ -253,6 +253,92 @@ export function writeAuditLog(opts: {
   } catch { /* non-fatal */ }
 }
 
+// ── Phase 4: Security settings ────────────────────────────────────────────────
+
+export function handleGetSecuritySettings(_req: express.Request, res: express.Response) {
+  try {
+    return res.json({
+      defaultDeny:           getSetting('sec_default_deny',         '1') === '1',
+      lateralMovement:       getSetting('sec_lateral_movement',     '1') === '1',
+      autoPolicySuggestions: getSetting('sec_auto_policy',          '1') === '1',
+      iotQuarantine:         getSetting('sec_iot_quarantine',       '0') === '1',
+    })
+  } catch (e) {
+    return res.status(500).json({ error: String(e) })
+  }
+}
+
+export function handleUpdateSecuritySettings(req: express.Request, res: express.Response) {
+  try {
+    const db   = getDb()
+    const body = req.body as Record<string, unknown>
+    const map: Record<string, string> = {
+      defaultDeny:           'sec_default_deny',
+      lateralMovement:       'sec_lateral_movement',
+      autoPolicySuggestions: 'sec_auto_policy',
+      iotQuarantine:         'sec_iot_quarantine',
+    }
+    const upsert = db.prepare(
+      'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ' +
+      'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+    )
+    const now = Date.now()
+    db.transaction(() => {
+      for (const [field, dbKey] of Object.entries(map)) {
+        if (body[field] !== undefined) upsert.run(dbKey, body[field] ? '1' : '0', now)
+      }
+    })()
+    writeAuditLog({ action: 'security_update', entityType: 'settings',
+      newValue: JSON.stringify(body) })
+    return res.json({ ok: true })
+  } catch (e) {
+    return res.status(500).json({ error: String(e) })
+  }
+}
+
+// ── Phase 4: Notification settings ────────────────────────────────────────────
+
+export function handleGetNotificationSettings(_req: express.Request, res: express.Response) {
+  try {
+    return res.json({
+      criticalImmediate: getSetting('notif_critical_immediate', '1') === '1',
+      dailyDigest:       getSetting('notif_daily_digest',       '1') === '1',
+      newDevices:        getSetting('notif_new_devices',        '0') === '1',
+      policyApprovals:   getSetting('notif_policy_approvals',   '1') === '1',
+    })
+  } catch (e) {
+    return res.status(500).json({ error: String(e) })
+  }
+}
+
+export function handleUpdateNotificationSettings(req: express.Request, res: express.Response) {
+  try {
+    const db   = getDb()
+    const body = req.body as Record<string, unknown>
+    const map: Record<string, string> = {
+      criticalImmediate: 'notif_critical_immediate',
+      dailyDigest:       'notif_daily_digest',
+      newDevices:        'notif_new_devices',
+      policyApprovals:   'notif_policy_approvals',
+    }
+    const upsert = db.prepare(
+      'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ' +
+      'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+    )
+    const now = Date.now()
+    db.transaction(() => {
+      for (const [field, dbKey] of Object.entries(map)) {
+        if (body[field] !== undefined) upsert.run(dbKey, body[field] ? '1' : '0', now)
+      }
+    })()
+    writeAuditLog({ action: 'notifications_update', entityType: 'settings',
+      newValue: JSON.stringify(body) })
+    return res.json({ ok: true })
+  } catch (e) {
+    return res.status(500).json({ error: String(e) })
+  }
+}
+
 // ── Known devices ─────────────────────────────────────────────────────────────
 
 export function handleGetKnownDevices(req: express.Request, res: express.Response) {

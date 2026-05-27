@@ -33,6 +33,8 @@ import {
   handleDbStats, writeAuditLog,
   handleGetKnownDevices, handleUpdateKnownDevice,
   handleGetAuditLog, handlePurgeData, handleExportEventsCsv,
+  handleGetSecuritySettings, handleUpdateSecuritySettings,
+  handleGetNotificationSettings, handleUpdateNotificationSettings,
 } from './history.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -340,6 +342,12 @@ app.patch('/api/devices/known/:mac',    requireAuth, handleUpdateKnownDevice)
 app.get  ('/api/history/audit',         requireAuth, handleGetAuditLog)
 app.post ('/api/history/purge',         requireAuth, handlePurgeData)
 app.get  ('/api/history/events/export', requireAuth, handleExportEventsCsv)
+
+// Phase 4 routes
+app.get('/api/settings/security',       requireAuth, handleGetSecuritySettings)
+app.put('/api/settings/security',       requireAuth, handleUpdateSecuritySettings)
+app.get('/api/settings/notifications',  requireAuth, handleGetNotificationSettings)
+app.put('/api/settings/notifications',  requireAuth, handleUpdateNotificationSettings)
 
 // ── Firewall toggle ───────────────────────────────────────────────────────────
 // PATCH /api/unifi/firewall/:id  { enabled: boolean }

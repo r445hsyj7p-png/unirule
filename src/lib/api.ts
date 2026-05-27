@@ -161,6 +161,23 @@ export const api = {
     if (params?.to     !== undefined) q.set('to',   String(params.to))
     return `/api/history/events/export?${q}`
   },
+
+  // ── Phase 4 ──────────────────────────────────────────────────────────────────
+  getSecuritySettings:    () =>
+    request<SecuritySettings>('/api/settings/security'),
+
+  updateSecuritySettings: (s: Partial<SecuritySettings>) =>
+    request<{ ok: boolean }>('/api/settings/security', {
+      method: 'PUT', body: JSON.stringify(s),
+    }),
+
+  getNotificationSettings:    () =>
+    request<NotificationSettings>('/api/settings/notifications'),
+
+  updateNotificationSettings: (s: Partial<NotificationSettings>) =>
+    request<{ ok: boolean }>('/api/settings/notifications', {
+      method: 'PUT', body: JSON.stringify(s),
+    }),
 }
 
 // ── Phase 3 types ─────────────────────────────────────────────────────────────
@@ -207,6 +224,22 @@ export interface PurgeResult {
   clientSnapsDeleted:  number
   deviceSnapsDeleted:  number
   notifDeleted:        number
+}
+
+// ── Phase 4 types ─────────────────────────────────────────────────────────────
+
+export interface SecuritySettings {
+  defaultDeny:           boolean
+  lateralMovement:       boolean
+  autoPolicySuggestions: boolean
+  iotQuarantine:         boolean
+}
+
+export interface NotificationSettings {
+  criticalImmediate: boolean
+  dailyDigest:       boolean
+  newDevices:        boolean
+  policyApprovals:   boolean
 }
 
 // ── Response types (matches server normalisation) ─────────────────────────────

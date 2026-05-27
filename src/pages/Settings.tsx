@@ -15,10 +15,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useAppearanceStore, applyFont, applyFavicon, type FontChoice } from '@/lib/appearanceStore'
 import { useThemeStore } from '@/lib/themeStore'
 import { api } from '@/lib/api'
-import { useDbStats, useAppSettings, useAuditLog } from '@/hooks/useUnifi'
+import { useDbStats, useAppSettings, useAuditLog, useSecuritySettings, useNotificationSettings } from '@/hooks/useUnifi'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
 import { formatBytes } from '@/lib/utils'
-import type { AuditLogEntry, PurgeResult } from '@/lib/api'
+import type { AuditLogEntry, PurgeResult, SecuritySettings, NotificationSettings } from '@/lib/api'
 
 // ── Coming Soon overlay ───────────────────────────────────────────────────────
 
@@ -735,6 +735,212 @@ function AuditTab() {
   )
 }
 
+// ── Reusable toggle switch ────────────────────────────────────────────────────
+
+function ToggleSwitch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+        checked ? 'bg-green-500' : 'bg-muted'
+      }`}
+    >
+      <span
+        className={`pointer-events-none block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+          checked ? 'translate-x-5' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
+  )
+}
+
+// ── Security (Phase 4) ────────────────────────────────────────────────────────
+
+function SecurityTab() {
+  const qc    = useQueryClient()
+  const secQ  = useSecuritySettings()
+
+  const DEFAULTS: SecuritySettings = {
+    defaultDeny: true, lateralMovement: true, autoPolicySuggestions: true, iotQuarantine: false,
+  }
+
+  const [local,   setLocal]   = useState<SecuritySettings | null>(null)
+  const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null)
+
+  useEffect(() => {
+    if (secQ.data && local === null) setLocal(secQ.data)
+  }, [secQ.data])
+
+  const current = local ?? secQ.data ?? DEFAULTS
+
+  function toggle(key: keyof SecuritySettings) {
+    setLocal(prev => ({ ...(prev ?? current), [key]: !(prev ?? current)[key] }))
+  }
+
+  const saveMut = useMutation({
+    mutationFn: api.updateSecuritySettings,
+    onSuccess: () => {
+      setSaveMsg({ text: 'Konfiguration gespeichert', ok: true })
+      qc.invalidateQueries({ queryKey: ['settings', 'security'] })
+      setTimeout(() => setSaveMsg(null), 3000)
+    },
+    onError: (err) => setSaveMsg({ text: err instanceof Error ? err.message : 'Fehler beim Speichern', ok: false }),
+  })
+
+  const items: { key: keyof SecuritySettings; label: string; desc: string }[] = [
+    { key: 'defaultDeny',           label: 'Default Deny Modus',           desc: 'Alle nicht explizit erlaubten Verbindungen blockieren' },
+    { key: 'lateralMovement',       label: 'Lateral Movement Detection',   desc: 'Anomaler East-West-Traffic wird als Bedrohung gemeldet' },
+    { key: 'autoPolicySuggestions', label: 'Automatische Policy-Vorschläge', desc: 'Analyse der Konfigurationsänderungen' },
+    { key: 'iotQuarantine',         label: 'IoT-Quarantäne bei Anomalie',  desc: 'IoT-Geräte werden bei Verdacht automatisch isoliert' },
+  ]
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Shield className="h-4 w-4" />
+          Zero Trust Konfiguration
+        </CardTitle>
+        <CardDescription className="text-xs">Parameter für die Policy Engine · Änderungen werden im Audit-Log protokolliert</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {secQ.isLoading && (
+          <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <RefreshCw className="h-3 w-3 animate-spin" />Einstellungen werden geladen…
+          </p>
+        )}
+        {items.map(({ key, label, desc }) => (
+          <div key={key} className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-sm font-medium">{label}</div>
+              <div className="text-xs text-muted-foreground">{desc}</div>
+            </div>
+            <ToggleSwitch checked={current[key]} onChange={() => toggle(key)} />
+          </div>
+        ))}
+
+        {saveMsg && (
+          <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-xs ${
+            saveMsg.ok
+              ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400'
+              : 'border-red-500/30 bg-red-500/10 text-red-600'
+          }`}>
+            {saveMsg.ok
+              ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+              : <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
+            {saveMsg.text}
+          </div>
+        )}
+
+        <Button
+          size="sm"
+          onClick={() => saveMut.mutate(current)}
+          disabled={saveMut.isPending || secQ.isLoading}
+        >
+          {saveMut.isPending
+            ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />Wird gespeichert…</>
+            : <><Save className="h-4 w-4" />Konfiguration speichern</>}
+        </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ── Notifications (Phase 4) ───────────────────────────────────────────────────
+
+function NotificationsTab() {
+  const qc      = useQueryClient()
+  const notifQ  = useNotificationSettings()
+
+  const DEFAULTS: NotificationSettings = {
+    criticalImmediate: true, dailyDigest: true, newDevices: false, policyApprovals: true,
+  }
+
+  const [local,   setLocal]   = useState<NotificationSettings | null>(null)
+  const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null)
+
+  useEffect(() => {
+    if (notifQ.data && local === null) setLocal(notifQ.data)
+  }, [notifQ.data])
+
+  const current = local ?? notifQ.data ?? DEFAULTS
+
+  function toggle(key: keyof NotificationSettings) {
+    setLocal(prev => ({ ...(prev ?? current), [key]: !(prev ?? current)[key] }))
+  }
+
+  const saveMut = useMutation({
+    mutationFn: api.updateNotificationSettings,
+    onSuccess: () => {
+      setSaveMsg({ text: 'Benachrichtigungen gespeichert', ok: true })
+      qc.invalidateQueries({ queryKey: ['settings', 'notifications'] })
+      setTimeout(() => setSaveMsg(null), 3000)
+    },
+    onError: (err) => setSaveMsg({ text: err instanceof Error ? err.message : 'Fehler beim Speichern', ok: false }),
+  })
+
+  const items: { key: keyof NotificationSettings; label: string; desc: string }[] = [
+    { key: 'criticalImmediate', label: 'Kritische Alerts sofort',       desc: 'E-Mail + Push bei severity=critical' },
+    { key: 'dailyDigest',       label: 'Tägliche Zusammenfassung',      desc: '08:00 Uhr — alle offenen Alerts' },
+    { key: 'newDevices',        label: 'Neue Geräte im Netzwerk',       desc: 'Benachrichtigung bei unbekannten MAC-Adressen' },
+    { key: 'policyApprovals',   label: 'Policy-Genehmigungsanfragen',   desc: 'Wenn neue Empfehlungen verfügbar sind' },
+  ]
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Bell className="h-4 w-4" />
+          Alert-Schwellwerte
+        </CardTitle>
+        <CardDescription className="text-xs">Steuerung wann und wie du benachrichtigt wirst</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {notifQ.isLoading && (
+          <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <RefreshCw className="h-3 w-3 animate-spin" />Einstellungen werden geladen…
+          </p>
+        )}
+        {items.map(({ key, label, desc }) => (
+          <div key={key} className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-sm font-medium">{label}</div>
+              <div className="text-xs text-muted-foreground">{desc}</div>
+            </div>
+            <ToggleSwitch checked={current[key]} onChange={() => toggle(key)} />
+          </div>
+        ))}
+
+        {saveMsg && (
+          <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-xs ${
+            saveMsg.ok
+              ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400'
+              : 'border-red-500/30 bg-red-500/10 text-red-600'
+          }`}>
+            {saveMsg.ok
+              ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+              : <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
+            {saveMsg.text}
+          </div>
+        )}
+
+        <Button
+          size="sm"
+          onClick={() => saveMut.mutate(current)}
+          disabled={saveMut.isPending || notifQ.isLoading}
+        >
+          {saveMut.isPending
+            ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />Wird gespeichert…</>
+            : <><Save className="h-4 w-4" />Einstellungen speichern</>}
+        </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Settings() {
@@ -779,14 +985,8 @@ export default function Settings() {
       <Tabs defaultValue="general">
         <TabsList>
           <TabsTrigger value="general">Allgemein</TabsTrigger>
-          <TabsTrigger value="security">
-            Sicherheit
-            <Badge variant="outline" className="ml-1.5 text-[9px] py-0 px-1">Soon</Badge>
-          </TabsTrigger>
-          <TabsTrigger value="notifications">
-            Benachrichtigungen
-            <Badge variant="outline" className="ml-1.5 text-[9px] py-0 px-1">Soon</Badge>
-          </TabsTrigger>
+          <TabsTrigger value="security">Sicherheit</TabsTrigger>
+          <TabsTrigger value="notifications">Benachrichtigungen</TabsTrigger>
           <TabsTrigger value="data">Daten</TabsTrigger>
           <TabsTrigger value="audit">Audit-Log</TabsTrigger>
         </TabsList>
@@ -917,72 +1117,14 @@ export default function Settings() {
 
         </TabsContent>
 
-        {/* ── Sicherheit (Coming Soon) ── */}
+        {/* ── Sicherheit ── */}
         <TabsContent value="security" className="mt-4">
-          <div className="relative">
-            <ComingSoonOverlay />
-            <Card className="pointer-events-none select-none opacity-50">
-              <CardHeader>
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <Shield className="h-4 w-4" />
-                  Zero Trust Konfiguration
-                </CardTitle>
-                <CardDescription className="text-xs">Parameter für die Policy Engine</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {[
-                  { label: 'Default Deny Modus', desc: 'Alle nicht explizit erlaubten Verbindungen blockieren', active: true },
-                  { label: 'Lateral Movement Detection', desc: 'Anomaler East-West-Traffic wird als Bedrohung gemeldet', active: true },
-                  { label: 'Automatische Policy-Vorschläge', desc: 'Analyse der Konfigurationsänderungen', active: true },
-                  { label: 'IoT-Quarantäne bei Anomalie', desc: 'IoT-Geräte werden bei Verdacht automatisch isoliert', active: false },
-                ].map(s => (
-                  <div key={s.label} className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-medium">{s.label}</div>
-                      <div className="text-xs text-muted-foreground">{s.desc}</div>
-                    </div>
-                    <div className={`w-10 h-5 rounded-full flex items-center px-0.5 ${s.active ? 'bg-green-500 justify-end' : 'bg-muted justify-start'}`}>
-                      <div className="w-4 h-4 rounded-full bg-white shadow" />
-                    </div>
-                  </div>
-                ))}
-                <Button size="sm" disabled><Save className="h-4 w-4" />Konfiguration speichern</Button>
-              </CardContent>
-            </Card>
-          </div>
+          <SecurityTab />
         </TabsContent>
 
-        {/* ── Benachrichtigungen (Coming Soon) ── */}
+        {/* ── Benachrichtigungen ── */}
         <TabsContent value="notifications" className="mt-4">
-          <div className="relative">
-            <ComingSoonOverlay />
-            <Card className="pointer-events-none select-none opacity-50">
-              <CardHeader>
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <Bell className="h-4 w-4" />
-                  Alert-Schwellwerte
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {[
-                  { label: 'Kritische Alerts sofort', desc: 'E-Mail + Push bei severity=critical', active: true },
-                  { label: 'Tägliche Zusammenfassung', desc: '08:00 Uhr — alle offenen Alerts', active: true },
-                  { label: 'Neue Geräte im Netzwerk', desc: 'Benachrichtigung bei unbekannten MAC-Adressen', active: false },
-                  { label: 'Policy-Genehmigungsanfragen', desc: 'Wenn neue Empfehlungen verfügbar sind', active: true },
-                ].map(s => (
-                  <div key={s.label} className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-medium">{s.label}</div>
-                      <div className="text-xs text-muted-foreground">{s.desc}</div>
-                    </div>
-                    <div className={`w-10 h-5 rounded-full flex items-center px-0.5 ${s.active ? 'bg-green-500 justify-end' : 'bg-muted justify-start'}`}>
-                      <div className="w-4 h-4 rounded-full bg-white shadow" />
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          </div>
+          <NotificationsTab />
         </TabsContent>
 
         {/* ── Daten ── */}
