@@ -252,3 +252,213 @@ export function writeAuditLog(opts: {
     })
   } catch { /* non-fatal */ }
 }
+
+// ── Known devices ─────────────────────────────────────────────────────────────
+
+export function handleGetKnownDevices(req: express.Request, res: express.Response) {
+  try {
+    const db     = getDb()
+    const limit  = Math.min(parseInt(String(req.query.limit  ?? '200'), 10) || 200, 1000)
+    const offset = Math.max(parseInt(String(req.query.offset ?? '0'),   10) || 0,   0)
+    const search   = typeof req.query.search   === 'string' && req.query.search   !== '' ? req.query.search   : null
+    const category = typeof req.query.category === 'string' && req.query.category !== '' ? req.query.category : null
+    const trusted  = req.query.trusted === 'true' ? 1 : req.query.trusted === 'false' ? 0 : null
+
+    let where = 'WHERE 1=1'
+    const params: (string | number)[] = []
+    if (search) {
+      where += ' AND (name LIKE ? OR mac LIKE ? OR ip LIKE ? OR oui LIKE ?)'
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`)
+    }
+    if (category !== null) { where += ' AND category = ?'; params.push(category) }
+    if (trusted  !== null) { where += ' AND trusted = ?';  params.push(trusted)  }
+
+    const rows = db.prepare(
+      `SELECT mac, name, ip, oui, category, trusted, flagged, notes, first_seen, last_seen, notified
+       FROM known_devices ${where} ORDER BY last_seen DESC LIMIT ? OFFSET ?`
+    ).all(...params, limit, offset) as Array<{
+      mac: string; name: string; ip: string; oui: string; category: string
+      trusted: number; flagged: number; notes: string | null
+      first_seen: number; last_seen: number; notified: number
+    }>
+
+    const total = (db.prepare(
+      `SELECT COUNT(*) AS n FROM known_devices ${where}`
+    ).get(...params) as { n: number }).n
+
+    return res.json({
+      items: rows.map(r => ({
+        mac:       r.mac,
+        name:      r.name,
+        ip:        r.ip,
+        oui:       r.oui,
+        category:  r.category,
+        trusted:   r.trusted === 1,
+        flagged:   r.flagged === 1,
+        notes:     r.notes,
+        firstSeen: new Date(r.first_seen).toISOString(),
+        lastSeen:  new Date(r.last_seen).toISOString(),
+        isNew:     (Date.now() - r.first_seen) < 24 * 3_600_000,
+      })),
+      total,
+    })
+  } catch (e) {
+    return res.status(500).json({ error: String(e) })
+  }
+}
+
+export function handleUpdateKnownDevice(req: express.Request, res: express.Response) {
+  try {
+    const db  = getDb()
+    const mac = String((req.params as Record<string, string>).mac ?? '').toLowerCase()
+    if (!mac) return res.status(400).json({ error: 'mac required' })
+
+    const body    = req.body as Record<string, unknown>
+    const allowed: Record<string, string | number | null> = {}
+    if (body.name     !== undefined) allowed['name']     = String(body.name     ?? '').slice(0, 100)
+    if (body.notes    !== undefined) allowed['notes']    = body.notes === null ? null : String(body.notes).slice(0, 500)
+    if (body.trusted  !== undefined) allowed['trusted']  = body.trusted  ? 1 : 0
+    if (body.flagged  !== undefined) allowed['flagged']  = body.flagged  ? 1 : 0
+    if (body.category !== undefined) allowed['category'] = String(body.category ?? '').slice(0, 50)
+
+    if (Object.keys(allowed).length === 0) return res.status(400).json({ error: 'No valid fields' })
+
+    const sets   = Object.keys(allowed).map(k => `${k} = ?`).join(', ')
+    const values = Object.values(allowed)
+    const result = db.prepare(`UPDATE known_devices SET ${sets} WHERE mac = ?`).run(...values, mac)
+    if (result.changes === 0) return res.status(404).json({ error: 'Device not found' })
+
+    return res.json({ ok: true })
+  } catch (e) {
+    return res.status(500).json({ error: String(e) })
+  }
+}
+
+// ── Audit log viewer ──────────────────────────────────────────────────────────
+
+export function handleGetAuditLog(req: express.Request, res: express.Response) {
+  try {
+    const db     = getDb()
+    const limit  = Math.min(parseInt(String(req.query.limit  ?? '100'), 10) || 100, 500)
+    const offset = Math.max(parseInt(String(req.query.offset ?? '0'),   10) || 0,   0)
+    const from   = typeof req.query.from   === 'string' ? parseInt(req.query.from,   10) : null
+    const to     = typeof req.query.to     === 'string' ? parseInt(req.query.to,     10) : null
+    const action = typeof req.query.action === 'string' && req.query.action !== '' ? req.query.action : null
+
+    let where = 'WHERE 1=1'
+    const params: (string | number)[] = []
+    if (from   !== null) { where += ' AND timestamp >= ?'; params.push(from)   }
+    if (to     !== null) { where += ' AND timestamp <= ?'; params.push(to)     }
+    if (action !== null) { where += ' AND action = ?';     params.push(action) }
+
+    const rows = db.prepare(
+      `SELECT id, timestamp, action, entity_type, entity_id, entity_name, old_value, new_value, user_ip
+       FROM audit_log ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`
+    ).all(...params, limit, offset) as Array<{
+      id: number; timestamp: number; action: string; entity_type: string
+      entity_id: string | null; entity_name: string | null
+      old_value: string | null; new_value: string | null; user_ip: string
+    }>
+
+    const total = (db.prepare(
+      `SELECT COUNT(*) AS n FROM audit_log ${where}`
+    ).get(...params) as { n: number }).n
+
+    return res.json({
+      items: rows.map(r => ({
+        id:         r.id,
+        timestamp:  new Date(r.timestamp).toISOString(),
+        action:     r.action,
+        entityType: r.entity_type,
+        entityId:   r.entity_id,
+        entityName: r.entity_name,
+        oldValue:   r.old_value,
+        newValue:   r.new_value,
+        userIp:     r.user_ip,
+      })),
+      total,
+    })
+  } catch (e) {
+    return res.status(500).json({ error: String(e) })
+  }
+}
+
+// ── Data purge ────────────────────────────────────────────────────────────────
+
+export function handlePurgeData(_req: express.Request, res: express.Response) {
+  try {
+    const db  = getDb()
+    const now = Date.now()
+
+    const eventsMs    = getSettingInt('events_retention_days',    30) * 86_400_000
+    const metricsMs   = getSettingInt('metrics_retention_days',   90) * 86_400_000
+    const snapshotsMs = getSettingInt('snapshots_retention_days', 14) * 86_400_000
+
+    const eventsDeleted      = db.prepare('DELETE FROM events           WHERE timestamp   < ?').run(now - eventsMs   ).changes
+    const metricsDeleted     = db.prepare('DELETE FROM metrics           WHERE bucket      < ?').run(now - metricsMs  ).changes
+    const clientSnapsDeleted = db.prepare('DELETE FROM client_snapshots  WHERE captured_at < ?').run(now - snapshotsMs).changes
+    const deviceSnapsDeleted = db.prepare('DELETE FROM device_snapshots  WHERE captured_at < ?').run(now - snapshotsMs).changes
+    // Prune already-read notifications older than 7 days
+    const notifDeleted       = db.prepare('DELETE FROM notifications WHERE read = 1 AND created_at < ?').run(now - 7 * 86_400_000).changes
+
+    db.pragma('wal_checkpoint(TRUNCATE)')
+
+    writeAuditLog({
+      action:     'purge',
+      entityType: 'database',
+      newValue:   JSON.stringify({ eventsDeleted, metricsDeleted, clientSnapsDeleted, deviceSnapsDeleted, notifDeleted }),
+    })
+
+    return res.json({ eventsDeleted, metricsDeleted, clientSnapsDeleted, deviceSnapsDeleted, notifDeleted })
+  } catch (e) {
+    return res.status(500).json({ error: String(e) })
+  }
+}
+
+// ── CSV export ────────────────────────────────────────────────────────────────
+
+export function handleExportEventsCsv(req: express.Request, res: express.Response) {
+  try {
+    const db     = getDb()
+    const limit  = Math.min(parseInt(String(req.query.limit ?? '10000'), 10) || 10000, 50000)
+    const level  = typeof req.query.level  === 'string' && req.query.level  !== 'all' ? req.query.level  : null
+    const search = typeof req.query.search === 'string' && req.query.search !== ''    ? req.query.search : null
+    const from   = typeof req.query.from   === 'string' ? parseInt(req.query.from,   10) : null
+    const to     = typeof req.query.to     === 'string' ? parseInt(req.query.to,     10) : null
+
+    let sql = 'SELECT timestamp, level, source, device, ip, dst_ip, dst_port, proto, message FROM events WHERE 1=1'
+    const params: (string | number)[] = []
+    if (level)  { sql += ' AND level = ?';  params.push(level) }
+    if (search) { sql += ' AND (message LIKE ? OR device LIKE ? OR ip LIKE ?)'; params.push(`%${search}%`, `%${search}%`, `%${search}%`) }
+    if (from)   { sql += ' AND timestamp >= ?'; params.push(from) }
+    if (to)     { sql += ' AND timestamp <= ?'; params.push(to)   }
+    sql += ' ORDER BY timestamp DESC LIMIT ?'
+    params.push(limit)
+
+    const rows = db.prepare(sql).all(...params) as Array<{
+      timestamp: number; level: string; source: string; device: string
+      ip: string; dst_ip: string; dst_port: number | null; proto: string; message: string
+    }>
+
+    const escape = (v: string | number | null | undefined): string => {
+      const s = String(v ?? '')
+      return s.includes(',') || s.includes('"') || s.includes('\n')
+        ? `"${s.replace(/"/g, '""')}"` : s
+    }
+
+    const header = 'timestamp,level,source,device,ip,dst_ip,dst_port,proto,message\n'
+    const body   = rows.map(r => [
+      new Date(r.timestamp).toISOString(),
+      escape(r.level), escape(r.source), escape(r.device),
+      escape(r.ip), escape(r.dst_ip),
+      r.dst_port ?? '',
+      escape(r.proto), escape(r.message),
+    ].join(',')).join('\n')
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', 'attachment; filename="unirule-events.csv"')
+    return res.send(header + body)
+  } catch (e) {
+    return res.status(500).json({ error: String(e) })
+  }
+}

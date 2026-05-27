@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useMemo } from 'react'
 import {
   Search, RefreshCw, Download, Terminal, Upload,
   FileUp, CheckCircle, AlertTriangle, X, Info
@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useHistoryEvents } from '@/hooks/useUnifi'
 import { useConnectionStore } from '@/lib/store'
+import { api } from '@/lib/api'
 import type { UnifiLogRow } from '@/lib/api'
 import { DataState } from '@/components/ui/empty-state'
 
@@ -330,20 +331,38 @@ function getLogTime(log: LogEntry): Date {
   return log.timestamp instanceof Date ? log.timestamp : new Date(log.timestamp)
 }
 
+const LOG_PAGE = 200
+
 export default function LogExplorer() {
-  const [search, setSearch] = useState('')
-  const [levelFilter, setLevelFilter] = useState('all')
+  const [search,       setSearch]       = useState('')
+  const [levelFilter,  setLevelFilter]  = useState('all')
   const [sourceFilter, setSourceFilter] = useState('all')
-  const [viewMode, setViewMode] = useState<'structured' | 'raw'>('structured')
-  const [showImport, setShowImport] = useState(false)
+  const [viewMode,     setViewMode]     = useState<'structured' | 'raw'>('structured')
+  const [showImport,   setShowImport]   = useState(false)
   const [importedLogs, setImportedLogs] = useState<ParsedLog[]>([])
   const [importBanner, setImportBanner] = useState('')
+  const [dateRange,    setDateRange]    = useState<'1h' | '6h' | '24h' | '7d' | 'all'>('all')
+  const [page,         setPage]         = useState(0)
 
   const configured = useConnectionStore(s => s.configured)
-  const eventsQ = useHistoryEvents({ limit: 2000 })
-  const apiLogs: UnifiLogRow[] = eventsQ.data ?? []
 
-  const allLogs: LogEntry[] = [...importedLogs, ...apiLogs]
+  // Stable `from` timestamp: recomputed only when dateRange changes, rounded to the nearest minute
+  const fromMs = useMemo<number | undefined>(() => {
+    if (dateRange === 'all') return undefined
+    const ago: Record<string, number> = { '1h': 3_600_000, '6h': 21_600_000, '24h': 86_400_000, '7d': 604_800_000 }
+    return Math.floor((Date.now() - (ago[dateRange] ?? 0)) / 60_000) * 60_000
+  }, [dateRange])
+
+  const eventsQ = useHistoryEvents({
+    limit:  LOG_PAGE,
+    offset: page * LOG_PAGE,
+    level:  levelFilter !== 'all' ? levelFilter : undefined,
+    search: search || undefined,
+    from:   fromMs,
+  })
+  const serverLogs: UnifiLogRow[] = eventsQ.data ?? []
+
+  const allLogs: LogEntry[] = [...importedLogs, ...serverLogs]
   const sources = [...new Set(allLogs.map(l => l.source))]
 
   function handleImport(logs: ParsedLog[], filename: string) {
@@ -352,21 +371,10 @@ export default function LogExplorer() {
     setTimeout(() => setImportBanner(''), 5000)
   }
 
-  const filtered = allLogs.filter(l => {
-    const matchSearch = l.message.toLowerCase().includes(search.toLowerCase()) ||
-      l.source.includes(search) || l.device.toLowerCase().includes(search.toLowerCase())
-    const matchLevel = levelFilter === 'all' || l.level === levelFilter
-    const matchSource = sourceFilter === 'all' || l.source === sourceFilter
-    return matchSearch && matchLevel && matchSource
-  })
-
-  function timeAgoLocal(d: Date) {
-    const s = Math.floor((Date.now() - d.getTime()) / 1000)
-    if (s < 60) return `${s}s`
-    if (s < 3600) return `${Math.floor(s/60)}m`
-    if (s < 86400) return `${Math.floor(s/3600)}h`
-    return d.toLocaleDateString('de-DE')
-  }
+  // Source filter applied client-side (level/search/from are server-side)
+  const filtered = allLogs.filter(l =>
+    sourceFilter === 'all' || l.source === sourceFilter
+  )
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -375,8 +383,8 @@ export default function LogExplorer() {
           <h1 className="text-2xl font-bold">Log Explorer</h1>
           <p className="text-muted-foreground text-sm mt-0.5">
             {importedLogs.length > 0
-              ? `${importedLogs.length} importierte + ${apiLogs.length} gespeicherte Einträge`
-              : `${apiLogs.length} gespeicherte Einträge · wird alle 60s aktualisiert`}
+              ? `${importedLogs.length} importierte + ${serverLogs.length} geladene Einträge`
+              : `${serverLogs.length} Einträge · Seite ${page + 1}`}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -392,9 +400,24 @@ export default function LogExplorer() {
             <RefreshCw className="h-4 w-4" />
             Aktualisieren
           </Button>
-          <Button variant="outline" size="sm">
+          <Button
+            variant="outline" size="sm"
+            onClick={() => {
+              const url = api.exportEventsCsvUrl({
+                level:  levelFilter !== 'all' ? levelFilter : undefined,
+                search: search || undefined,
+                from:   fromMs,
+              })
+              const a = document.createElement('a')
+              a.href = url
+              a.download = 'unirule-events.csv'
+              document.body.appendChild(a)
+              a.click()
+              document.body.removeChild(a)
+            }}
+          >
             <Download className="h-4 w-4" />
-            Export
+            Export CSV
           </Button>
           <Button
             variant={viewMode === 'raw' ? 'default' : 'outline'}
@@ -438,22 +461,37 @@ export default function LogExplorer() {
         </Card>
       )}
 
+      {/* Date range quick-select */}
+      <div className="flex gap-2 items-center flex-wrap">
+        <span className="text-xs text-muted-foreground">Zeitraum:</span>
+        {(['1h', '6h', '24h', '7d', 'all'] as const).map(r => (
+          <button
+            key={r}
+            onClick={() => { setDateRange(r); setPage(0) }}
+            className={`px-3 py-1.5 rounded-md border text-xs font-medium transition-colors ${
+              dateRange === r
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-border text-muted-foreground hover:bg-muted'
+            }`}
+          >
+            {r === 'all' ? 'Alles' : `Letzte ${r}`}
+          </button>
+        ))}
+      </div>
+
       {/* Level filter buttons */}
       <div className="flex gap-2 flex-wrap">
-        {['critical', 'error', 'warning', 'info'].map(level => {
-          const count = allLogs.filter(l => l.level === level).length
-          return (
-            <button
-              key={level}
-              onClick={() => setLevelFilter(levelFilter === level ? 'all' : level)}
-              className={`px-3 py-1.5 rounded-md border text-xs font-medium transition-colors ${
-                levelFilter === level ? levelColors[level] : 'border-border text-muted-foreground hover:bg-muted'
-              }`}
-            >
-              {level.toUpperCase()}: {count}
-            </button>
-          )
-        })}
+        {['critical', 'error', 'warning', 'info'].map(level => (
+          <button
+            key={level}
+            onClick={() => { setLevelFilter(levelFilter === level ? 'all' : level); setPage(0) }}
+            className={`px-3 py-1.5 rounded-md border text-xs font-medium transition-colors ${
+              levelFilter === level ? levelColors[level] : 'border-border text-muted-foreground hover:bg-muted'
+            }`}
+          >
+            {level.toUpperCase()}
+          </button>
+        ))}
         {importedLogs.length > 0 && (
           <button
             onClick={() => setImportedLogs([])}
@@ -472,11 +510,11 @@ export default function LogExplorer() {
           <Input
             placeholder="Nachricht, Gerät, Quelle..."
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={e => { setSearch(e.target.value); setPage(0) }}
             className="pl-8 h-8 text-sm"
           />
         </div>
-        <Select value={levelFilter} onValueChange={setLevelFilter}>
+        <Select value={levelFilter} onValueChange={v => { setLevelFilter(v); setPage(0) }}>
           <SelectTrigger className="w-36 h-8 text-sm"><SelectValue placeholder="Level" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Alle Level</SelectItem>
@@ -494,7 +532,7 @@ export default function LogExplorer() {
           </SelectContent>
         </Select>
         <div className="flex items-center text-xs text-muted-foreground">
-          {filtered.length} / {allLogs.length} Einträge
+          {filtered.length} Einträge · Seite {page + 1}
         </div>
       </div>
 
@@ -504,7 +542,7 @@ export default function LogExplorer() {
       )}
 
       {/* Empty live logs notice */}
-      {configured && apiLogs.length === 0 && !eventsQ.isLoading && importedLogs.length === 0 && (
+      {configured && serverLogs.length === 0 && !eventsQ.isLoading && importedLogs.length === 0 && (
         <DataState empty emptyText="Noch keine Logs gespeichert — Hintergrund-Ingestion läuft alle 30 Sekunden." />
       )}
 
@@ -569,6 +607,21 @@ export default function LogExplorer() {
             </ScrollArea>
           </CardContent>
         </Card>
+      )}
+
+      {/* Pagination */}
+      {(serverLogs.length === LOG_PAGE || page > 0) && (
+        <div className="flex items-center justify-between">
+          <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}>
+            ← Zurück
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            Seite {page + 1} · {serverLogs.length} Einträge
+          </span>
+          <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={serverLogs.length < LOG_PAGE}>
+            Weiter →
+          </Button>
+        </div>
       )}
 
       <ImportDialog

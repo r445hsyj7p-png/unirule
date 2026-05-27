@@ -134,7 +134,7 @@ export function useThreats() {
 // ── History events (SQLite-backed) ────────────────────────────────────────────
 
 export function useHistoryEvents(params?: {
-  limit?: number; level?: string; search?: string; from?: number; to?: number
+  limit?: number; offset?: number; level?: string; search?: string; from?: number; to?: number
 }) {
   const ok = useConfigured()
   return useQuery({
@@ -192,6 +192,35 @@ export function useDbStats() {
     queryKey: ['history', 'stats'],
     queryFn:  api.getDbStats,
     staleTime: 60_000,
+  })
+}
+
+// ── Known devices (persistent registry) ──────────────────────────────────────
+
+export function useKnownDevices(params?: {
+  search?: string; limit?: number; offset?: number; trusted?: boolean; category?: string
+}) {
+  const ok = useConfigured()
+  return useQuery({
+    queryKey: ['history', 'known-devices', params],
+    queryFn:  () => api.getKnownDevices(params),
+    enabled:  ok,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    retry: (n, err) => n < 2 && !(err instanceof ApiError && err.status === 503),
+  })
+}
+
+// ── Audit log ─────────────────────────────────────────────────────────────────
+
+export function useAuditLog(params?: {
+  limit?: number; offset?: number; from?: number; to?: number; action?: string
+}) {
+  return useQuery({
+    queryKey: ['history', 'audit', params],
+    queryFn:  () => api.getAuditLog(params),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   })
 }
 

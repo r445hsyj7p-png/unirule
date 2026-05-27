@@ -112,6 +112,101 @@ export const api = {
 
   getDbStats: () =>
     request<DbStats>('/api/history/stats'),
+
+  // ── Phase 3 ──────────────────────────────────────────────────────────────────
+  getKnownDevices: (params?: {
+    search?: string; limit?: number; offset?: number
+    trusted?: boolean; category?: string
+  }) => {
+    const q = new URLSearchParams()
+    if (params?.limit    !== undefined) q.set('limit',    String(params.limit))
+    if (params?.offset   !== undefined) q.set('offset',   String(params.offset))
+    if (params?.search)                 q.set('search',   params.search)
+    if (params?.category)               q.set('category', params.category)
+    if (params?.trusted  !== undefined) q.set('trusted',  String(params.trusted))
+    return request<KnownDevicesResponse>(`/api/devices/known?${q}`)
+  },
+
+  updateKnownDevice: (
+    mac: string,
+    patch: Partial<Pick<KnownDevice, 'name' | 'notes' | 'trusted' | 'flagged' | 'category'>>
+  ) =>
+    request<{ ok: boolean }>(`/api/devices/known/${encodeURIComponent(mac)}`, {
+      method: 'PATCH', body: JSON.stringify(patch),
+    }),
+
+  getAuditLog: (params?: {
+    limit?: number; offset?: number; from?: number; to?: number; action?: string
+  }) => {
+    const q = new URLSearchParams()
+    if (params?.limit  !== undefined) q.set('limit',  String(params.limit))
+    if (params?.offset !== undefined) q.set('offset', String(params.offset))
+    if (params?.from   !== undefined) q.set('from',   String(params.from))
+    if (params?.to     !== undefined) q.set('to',     String(params.to))
+    if (params?.action)               q.set('action', params.action)
+    return request<AuditLogResponse>(`/api/history/audit?${q}`)
+  },
+
+  purgeData: () =>
+    request<PurgeResult>('/api/history/purge', { method: 'POST' }),
+
+  /** Returns a URL (not a Promise) — use as anchor href or window.location */
+  exportEventsCsvUrl: (params?: {
+    level?: string; search?: string; from?: number; to?: number
+  }): string => {
+    const q = new URLSearchParams()
+    if (params?.level  && params.level  !== 'all') q.set('level',  params.level)
+    if (params?.search && params.search !== '')    q.set('search', params.search)
+    if (params?.from   !== undefined) q.set('from', String(params.from))
+    if (params?.to     !== undefined) q.set('to',   String(params.to))
+    return `/api/history/events/export?${q}`
+  },
+}
+
+// ── Phase 3 types ─────────────────────────────────────────────────────────────
+
+export interface KnownDevice {
+  mac:       string
+  name:      string
+  ip:        string
+  oui:       string
+  category:  string
+  trusted:   boolean
+  flagged:   boolean
+  notes:     string | null
+  firstSeen: string
+  lastSeen:  string
+  isNew:     boolean
+}
+
+export interface KnownDevicesResponse {
+  items: KnownDevice[]
+  total: number
+}
+
+export interface AuditLogEntry {
+  id:         number
+  timestamp:  string
+  action:     string
+  entityType: string
+  entityId:   string | null
+  entityName: string | null
+  oldValue:   string | null
+  newValue:   string | null
+  userIp:     string
+}
+
+export interface AuditLogResponse {
+  items: AuditLogEntry[]
+  total: number
+}
+
+export interface PurgeResult {
+  eventsDeleted:       number
+  metricsDeleted:      number
+  clientSnapsDeleted:  number
+  deviceSnapsDeleted:  number
+  notifDeleted:        number
 }
 
 // ── Response types (matches server normalisation) ─────────────────────────────

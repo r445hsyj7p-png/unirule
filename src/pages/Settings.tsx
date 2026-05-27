@@ -4,18 +4,21 @@ import {
   Palette, Upload, RotateCcw, Check, Sun, Moon, Lock,
   Eye, EyeOff, RefreshCw, CheckCircle2, AlertTriangle,
   HardDrive, FileText, Bell as BellIcon, Cpu,
+  Trash2, History, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useAppearanceStore, applyFont, applyFavicon, type FontChoice } from '@/lib/appearanceStore'
 import { useThemeStore } from '@/lib/themeStore'
 import { api } from '@/lib/api'
-import { useDbStats, useAppSettings } from '@/hooks/useUnifi'
-import { useQueryClient } from '@tanstack/react-query'
+import { useDbStats, useAppSettings, useAuditLog } from '@/hooks/useUnifi'
+import { useQueryClient, useMutation } from '@tanstack/react-query'
 import { formatBytes } from '@/lib/utils'
+import type { AuditLogEntry, PurgeResult } from '@/lib/api'
 
 // ── Coming Soon overlay ───────────────────────────────────────────────────────
 
@@ -24,7 +27,7 @@ function ComingSoonOverlay() {
     <div className="absolute inset-0 rounded-lg bg-background/60 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 z-10">
       <Badge variant="outline" className="text-xs gap-1.5 px-3 py-1">
         <Lock className="h-3 w-3" />
-        Coming Soon — Phase 2
+        Coming Soon — Phase 4
       </Badge>
       <p className="text-xs text-muted-foreground">Wird in einem kommenden Update implementiert</p>
     </div>
@@ -534,6 +537,199 @@ function DataTab() {
           </form>
         </CardContent>
       </Card>
+      {/* Purge section */}
+      <PurgeCard />
+    </div>
+  )
+}
+
+// ── Purge card ────────────────────────────────────────────────────────────────
+
+function PurgeCard() {
+  const qc = useQueryClient()
+  const [showConfirm, setShowConfirm] = useState(false)
+  const [result, setResult] = useState<PurgeResult | null>(null)
+
+  const purgeMut = useMutation({
+    mutationFn: api.purgeData,
+    onSuccess: (data) => {
+      setResult(data)
+      setShowConfirm(false)
+      qc.invalidateQueries({ queryKey: ['history', 'stats'] })
+    },
+  })
+
+  const total = result
+    ? result.eventsDeleted + result.metricsDeleted + result.clientSnapsDeleted + result.deviceSnapsDeleted + result.notifDeleted
+    : 0
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Trash2 className="h-4 w-4 text-orange-400" />
+            Daten bereinigen
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Löscht alle Einträge, die älter als die konfigurierten Aufbewahrungsfristen sind.
+            Firewall-Regeln und Einstellungen werden nicht berührt.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {result && (
+            <div className="mb-3 text-xs text-green-500 bg-green-500/10 border border-green-500/20 rounded-md px-3 py-2 flex items-center gap-2">
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+              {total} Datensätze gelöscht
+              {result.eventsDeleted > 0 && ` · ${result.eventsDeleted} Events`}
+              {result.metricsDeleted > 0 && ` · ${result.metricsDeleted} Metriken`}
+              {(result.clientSnapsDeleted + result.deviceSnapsDeleted) > 0
+                && ` · ${result.clientSnapsDeleted + result.deviceSnapsDeleted} Snapshots`}
+              {result.notifDeleted > 0 && ` · ${result.notifDeleted} Benachrichtigungen`}
+            </div>
+          )}
+          {purgeMut.isError && (
+            <div className="mb-3 text-xs text-red-500 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2 flex items-center gap-2">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              {(purgeMut.error as Error)?.message ?? 'Fehler beim Bereinigen'}
+            </div>
+          )}
+          <Button
+            variant="outline" size="sm"
+            className="border-orange-500/40 text-orange-400 hover:text-orange-300 hover:border-orange-500"
+            onClick={() => setShowConfirm(true)}
+            disabled={purgeMut.isPending}
+          >
+            <Trash2 className="h-4 w-4" />
+            {purgeMut.isPending ? 'Bereinige…' : 'Daten jetzt bereinigen'}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Dialog open={showConfirm} onOpenChange={setShowConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Daten bereinigen?</DialogTitle>
+            <DialogDescription>
+              Alle Events, Metriken und Snapshots, die älter als die konfigurierten
+              Aufbewahrungsfristen sind, werden unwiderruflich gelöscht.
+              Bereits gelesene Benachrichtigungen älter als 7 Tage werden ebenfalls entfernt.
+              Dieser Vorgang kann nicht rückgängig gemacht werden.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowConfirm(false)}>Abbrechen</Button>
+            <Button
+              variant="destructive"
+              onClick={() => purgeMut.mutate()}
+              disabled={purgeMut.isPending}
+            >
+              <Trash2 className="h-4 w-4" />
+              {purgeMut.isPending ? 'Lösche…' : 'Bereinigen'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+// ── Audit log tab ─────────────────────────────────────────────────────────────
+
+const AUDIT_PAGE = 50
+
+function AuditTab() {
+  const [page, setPage] = useState(0)
+  const auditQ = useAuditLog({ limit: AUDIT_PAGE, offset: page * AUDIT_PAGE })
+  const entries: AuditLogEntry[] = auditQ.data?.items ?? []
+  const total   = auditQ.data?.total ?? 0
+  const pages   = Math.max(1, Math.ceil(total / AUDIT_PAGE))
+
+  function actionLabel(action: string) {
+    const map: Record<string, string> = {
+      firewall_toggle: 'Firewall-Regel geändert',
+      purge:           'Daten bereinigt',
+      config_save:     'Konfiguration gespeichert',
+      config_delete:   'Konfiguration gelöscht',
+    }
+    return map[action] ?? action
+  }
+  function actionColor(action: string) {
+    if (action === 'purge') return 'text-orange-400'
+    if (action.includes('delete')) return 'text-red-400'
+    if (action.includes('toggle') || action.includes('save')) return 'text-blue-400'
+    return 'text-muted-foreground'
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <History className="h-4 w-4" />
+            Audit-Log
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Aufzeichnung aller Konfigurations- und Firewall-Änderungen · {total} Einträge gesamt
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="divide-y divide-border">
+            {auditQ.isLoading && Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="px-4 py-3">
+                <div className="h-4 bg-muted animate-pulse rounded w-3/4" />
+              </div>
+            ))}
+            {entries.map(e => (
+              <div key={e.id} className="px-4 py-3 flex items-start gap-3 hover:bg-muted/20 transition-colors">
+                <div className="shrink-0 mt-0.5 min-w-[160px]">
+                  <div className={`text-xs font-semibold ${actionColor(e.action)}`}>
+                    {actionLabel(e.action)}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                    {new Date(e.timestamp).toLocaleString('de-DE')}
+                    {e.userIp ? ` · ${e.userIp}` : ''}
+                  </div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  {e.entityName && (
+                    <span className="text-xs font-medium">{e.entityName}</span>
+                  )}
+                  {e.oldValue !== null && e.newValue !== null && (
+                    <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">
+                      <span className="text-red-400">{e.oldValue}</span>
+                      {' → '}
+                      <span className="text-green-400">{e.newValue}</span>
+                    </div>
+                  )}
+                  {e.newValue !== null && e.oldValue === null && (
+                    <div className="text-[10px] text-muted-foreground mt-0.5 font-mono truncate">
+                      {e.newValue.length > 120 ? `${e.newValue.slice(0, 120)}…` : e.newValue}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {!auditQ.isLoading && entries.length === 0 && (
+              <div className="py-16 text-center text-muted-foreground text-sm">
+                Noch keine Audit-Einträge vorhanden.
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {pages > 1 && (
+        <div className="flex items-center justify-between">
+          <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}>
+            <ChevronLeft className="h-4 w-4" />Zurück
+          </Button>
+          <span className="text-xs text-muted-foreground">Seite {page + 1} / {pages}</span>
+          <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(pages - 1, p + 1))} disabled={page >= pages - 1}>
+            Weiter<ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
@@ -591,6 +787,7 @@ export default function Settings() {
             <Badge variant="outline" className="ml-1.5 text-[9px] py-0 px-1">Soon</Badge>
           </TabsTrigger>
           <TabsTrigger value="data">Daten</TabsTrigger>
+          <TabsTrigger value="audit">Audit-Log</TabsTrigger>
         </TabsList>
 
         {/* ── Allgemein ── */}
@@ -790,6 +987,11 @@ export default function Settings() {
         {/* ── Daten ── */}
         <TabsContent value="data" className="mt-4">
           <DataTab />
+        </TabsContent>
+
+        {/* ── Audit-Log ── */}
+        <TabsContent value="audit" className="mt-4">
+          <AuditTab />
         </TabsContent>
       </Tabs>
     </div>
