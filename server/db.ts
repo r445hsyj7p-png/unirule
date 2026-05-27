@@ -9,7 +9,7 @@ import fs from 'node:fs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const DB_PATH = process.env.DB_PATH
+export const DB_PATH = process.env.DB_PATH
   ?? path.join(__dirname, '..', 'data', 'unirule.db')
 
 let _db: Database.Database | null = null

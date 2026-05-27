@@ -285,3 +285,8 @@ export function getUnifiClient(): UnifiClient {
 export function getUnifiConfig(): UnifiConfig | null {
   return _config
 }
+
+export function clearUnifiConfig(): void {
+  _config = null
+  _client = null
+}

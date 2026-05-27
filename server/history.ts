@@ -3,7 +3,7 @@
  * All routes are registered in server/index.ts under requireAuth middleware.
  */
 import type express from 'express'
-import { getDb, getSetting, getSettingInt } from './db.js'
+import { getDb, getSetting, getSettingInt, DB_PATH } from './db.js'
 import fs from 'node:fs'
 
 // ── Events history ────────────────────────────────────────────────────────────
@@ -203,10 +203,7 @@ export function handleDbStats(_req: express.Request, res: express.Response) {
 
     // DB file size
     let fileSizeBytes = 0
-    try {
-      const dbPath = process.env.DB_PATH ?? ''
-      if (dbPath) fileSizeBytes = fs.statSync(dbPath).size
-    } catch { /* ignore */ }
+    try { fileSizeBytes = fs.statSync(DB_PATH).size } catch { /* ignore */ }
 
     return res.json({
       eventCount,

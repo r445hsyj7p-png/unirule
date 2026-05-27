@@ -92,8 +92,8 @@ export const api = {
     from?: number; to?: number; resolution?: 'minute' | 'hour' | 'day'
   }) => {
     const q = new URLSearchParams()
-    if (params?.from)       q.set('from',       String(params.from))
-    if (params?.to)         q.set('to',         String(params.to))
+    if (params?.from !== undefined) q.set('from', String(params.from))
+    if (params?.to   !== undefined) q.set('to',   String(params.to))
     if (params?.resolution) q.set('resolution', params.resolution)
     return request<MetricsBucket[]>(`/api/history/metrics?${q}`)
   },

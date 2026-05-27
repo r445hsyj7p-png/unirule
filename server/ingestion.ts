@@ -10,6 +10,7 @@
  */
 import { getDb, getSettingInt } from './db.js'
 import { getUnifiClient, type UnifiClient as UClient, type UnifiDevice, type UnifiEvent } from './unifi-client.js'
+import { normalizeEvent } from './event-normalize.js'
 
 const intervals: ReturnType<typeof setInterval>[] = []
 let running = false
@@ -60,32 +61,43 @@ async function ingestEvents(): Promise<void> {
       (@unifi_id, @timestamp, @level, @source, @message, @device, @ip, @dst_ip, @dst_port, @proto, @raw)
   `)
 
+  const insertNotif = db.prepare(`
+    INSERT INTO notifications (type, severity, title, message, entity_id)
+    VALUES (@type, @severity, @title, @message, @entity_id)
+  `)
+
   const newCount = db.transaction((evts: UnifiEvent[]) => {
     let n = 0
+    let threatNotifCount = 0
     for (const e of evts) {
-      const ts  = e.datetime
-        ? new Date(e.datetime).getTime()
-        : (e.time ? e.time * 1000 : Date.now())
-      const msg = e.msg ?? e.key ?? ''
-      let level = 'info'
-      if (/critical|emerg|crit|exploit|rce|intrusion/i.test(msg)) level = 'critical'
-      else if (/block|deny|drop|attack|brute|flood|scan|malware|threat/i.test(msg)) level = 'warning'
-      else if (/error|fail|refused|reject/i.test(msg)) level = 'error'
-
+      const norm = normalizeEvent(e)
       const r = insert.run({
         unifi_id: e._id ?? null,
-        timestamp: ts,
-        level,
-        source:   e.subsystem ?? 'system',
-        message:  msg,
-        device:   e.ap ?? e.user ?? '',
-        ip:       e.ip ?? '',
-        dst_ip:   e.dst_ip ?? '',
-        dst_port: e.dst_port ?? null,
-        proto:    e.proto ?? '',
-        raw:      JSON.stringify(e),
+        timestamp: norm.timestamp,
+        level:     norm.level,
+        source:    norm.source,
+        message:   norm.message,
+        device:    norm.device,
+        ip:        norm.ip,
+        dst_ip:    norm.dstIp,
+        dst_port:  norm.dstPort ?? null,
+        proto:     norm.proto,
+        raw:       JSON.stringify(e),
       })
-      if (r.changes > 0) n++
+      if (r.changes > 0) {
+        n++
+        // Create a notification for newly-seen threat events (cap at 5/cycle to prevent spam)
+        if (threatNotifCount < 5 && (norm.level === 'critical' || norm.level === 'warning')) {
+          insertNotif.run({
+            type:      'threat',
+            severity:  norm.level,
+            title:     norm.level === 'critical' ? 'Kritisches Ereignis' : 'Sicherheitswarnung',
+            message:   norm.message.slice(0, 200),
+            entity_id: e._id ?? null,
+          })
+          threatNotifCount++
+        }
+      }
     }
     return n
   })(raw)

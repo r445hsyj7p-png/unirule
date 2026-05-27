@@ -2,6 +2,7 @@
  * TanStack Query hooks — all UniFi data fetching lives here.
  * When not configured → returns { notConfigured: true }.
  */
+import { useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { useConnectionStore } from '@/lib/store'
@@ -135,11 +136,14 @@ export function useThreats() {
 export function useHistoryEvents(params?: {
   limit?: number; level?: string; search?: string; from?: number; to?: number
 }) {
+  const ok = useConfigured()
   return useQuery({
     queryKey: ['history', 'events', params],
     queryFn:  () => api.getHistoryEvents(params),
+    enabled:  ok,
     staleTime: 30_000,
     refetchInterval: 60_000,
+    retry: (n, err) => n < 2 && !(err instanceof ApiError && err.status === 503),
   })
 }
 
@@ -148,29 +152,36 @@ export function useHistoryEvents(params?: {
 export function useHistoryMetrics(params?: {
   from?: number; to?: number; resolution?: 'minute' | 'hour' | 'day'
 }) {
+  const ok = useConfigured()
   return useQuery({
     queryKey: ['history', 'metrics', params],
     queryFn:  () => api.getHistoryMetrics(params),
+    enabled:  ok,
     staleTime: 60_000,
     refetchInterval: 60_000,
+    retry: (n, err) => n < 2 && !(err instanceof ApiError && err.status === 503),
   })
 }
 
 // ── Notifications (SQLite-backed) ─────────────────────────────────────────────
 
 export function useNotifications(unreadOnly = false) {
+  const ok = useConfigured()
   const qc = useQueryClient()
   const query = useQuery({
     queryKey:        ['history', 'notifications', unreadOnly],
     queryFn:         () => api.getNotifications(unreadOnly),
+    enabled:         ok,
     staleTime:       30_000,
     refetchInterval: 30_000,
+    retry: (n, err) => n < 2 && !(err instanceof ApiError && err.status === 503),
   })
-  function markAllRead() {
-    return api.markNotificationsRead().then(() => {
+  const markAllRead = useCallback(
+    () => api.markNotificationsRead().then(() => {
       qc.invalidateQueries({ queryKey: ['history', 'notifications'] })
-    })
-  }
+    }),
+    [qc],
+  )
   return { ...query, markAllRead }
 }
 

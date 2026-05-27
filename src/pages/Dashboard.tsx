@@ -12,7 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DataState } from '@/components/ui/empty-state'
-import { useMetrics, useThreats, useNetworks, useEvents, useFirewallRules, useHistoryMetrics } from '@/hooks/useUnifi'
+import { useMetrics, useThreats, useNetworks, useFirewallRules, useHistoryMetrics } from '@/hooks/useUnifi'
 import { useConnectionStore } from '@/lib/store'
 import { severityBg, timeAgo, formatBytes } from '@/lib/utils'
 
@@ -63,13 +63,12 @@ export default function Dashboard() {
   const { metrics, isLoading, isError } = useMetrics()
   const { threats, refetch } = useThreats()
   const networksQuery = useNetworks()
-  const eventsQuery = useEvents(500)   // still used for threats / blockedConnections
   const firewallQuery = useFirewallRules()
 
-  // Real time-series from SQLite metrics table
-  const now = Date.now()
-  const metrics24h = useHistoryMetrics({ from: now - 24 * 3_600_000, resolution: 'hour' })
-  const metrics7d  = useHistoryMetrics({ from: now - 7  * 86_400_000, resolution: 'day'  })
+  // Round to current hour so the queryKey is stable — no new network request per render
+  const nowHour = useMemo(() => Math.floor(Date.now() / 3_600_000) * 3_600_000, [])
+  const metrics24h = useHistoryMetrics({ from: nowHour - 24 * 3_600_000, resolution: 'hour' })
+  const metrics7d  = useHistoryMetrics({ from: nowHour - 7  * 86_400_000, resolution: 'day'  })
 
   // ── Zero Trust Score ───────────────────────────────────────────────────────
   const zeroTrustScore = useMemo(() => {
@@ -172,7 +171,8 @@ export default function Dashboard() {
   }, [metrics7d.data])
 
   // ── Derived stat card values ───────────────────────────────────────────────
-  const blockedConnections = eventsQuery.data?.filter(e => /block|deny|drop/i.test(e.message)).length ?? 0
+  // Compute from threats array (already fetched via useThreats → useEvents(2000))
+  const blockedConnections = threats.filter(t => /block|deny|drop/i.test(t.description)).length
   const policyViolations = threats.filter(t => /policy|violation/i.test(t.description)).length
   const complianceScore = `${Math.min(100, Math.max(0, Math.round((zeroTrustScore.score + (metrics.firewallRules > 0 ? 80 : 0)) / 2)))}%`
 

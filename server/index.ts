@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import bcrypt from 'bcryptjs'
 import {
-  setUnifiConfig, getUnifiClient, getUnifiConfig, UnifiClient,
+  setUnifiConfig, getUnifiClient, getUnifiConfig, clearUnifiConfig, UnifiClient,
   type UnifiConfig, type UnifiDevice, type UnifiClient as UClient,
   type UnifiEvent, type UnifiNetwork,
 } from './unifi-client.js'
@@ -24,7 +24,8 @@ import {
 } from './auth.js'
 import { simulatePacket } from './simulate.js'
 import { lookupOui, inferCategory } from './oui.js'
-import { startIngestion } from './ingestion.js'
+import { startIngestion, stopIngestion } from './ingestion.js'
+import { normalizeEvent } from './event-normalize.js'
 import {
   handleHistoryEvents, handleHistoryMetrics,
   handleGetNotifications, handleMarkNotificationsRead,
@@ -146,6 +147,8 @@ app.post('/api/config/test', async (req, res) => {
 
 app.delete('/api/config', (_req, res) => {
   try { fs.unlinkSync(CONFIG_PATH) } catch { /* ok */ }
+  stopIngestion()
+  clearUnifiConfig()
   return res.json({ ok: true })
 })
 
@@ -245,29 +248,19 @@ app.get('/api/unifi/events', async (req, res) => {
     const raw = await client.getEvents(limit)
 
     const logs = raw.map((e: UnifiEvent) => {
-      const ts = e.datetime ?? (e.time ? new Date(e.time * 1000).toISOString() : new Date().toISOString())
-      const sub = e.subsystem ?? 'system'
-      const msg = e.msg ?? e.key ?? ''
-
-      // Classify severity
-      let level = 'info'
-      const msgLow = msg.toLowerCase()
-      if (/critical|emerg|crit|exploit|rce|intrusion/i.test(msgLow)) level = 'critical'
-      else if (/block|deny|drop|attack|brute|flood|scan|malware|threat/i.test(msgLow)) level = 'warning'
-      else if (/error|fail|refused|reject/i.test(msgLow)) level = 'error'
-
+      const norm = normalizeEvent(e)
       return {
-        id: e._id,
-        timestamp: ts,
-        level,
-        source: sub,
-        message: msg,
-        device: e.ap ?? e.user ?? '',
-        ip: e.ip ?? '',
-        dstIp: e.dst_ip ?? '',
-        dstPort: e.dst_port,
-        proto: e.proto ?? '',
-        raw: e,
+        id:        e._id,
+        timestamp: new Date(norm.timestamp).toISOString(),
+        level:     norm.level,
+        source:    norm.source,
+        message:   norm.message,
+        device:    norm.device,
+        ip:        norm.ip,
+        dstIp:     norm.dstIp,
+        dstPort:   norm.dstPort,
+        proto:     norm.proto,
+        raw:       e,
       }
     })
     return res.json(logs)

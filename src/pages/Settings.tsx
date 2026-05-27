@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import {
   Save, Shield, Bell, Database,
   Palette, Upload, RotateCcw, Check, Sun, Moon, Lock,
@@ -361,6 +361,14 @@ function DataTab() {
   const meVal  = metricsRetention  ?? settings?.metrics_retention_days   ?? '90'
   const snVal  = snapshotRetention ?? settings?.snapshots_retention_days ?? '14'
 
+  // Initialize form values from server once loaded
+  useEffect(() => {
+    if (!settings) return
+    if (eventsRetention   === null) setEventsRetention(settings.events_retention_days)
+    if (metricsRetention  === null) setMetricsRetention(settings.metrics_retention_days)
+    if (snapshotRetention === null) setSnapshotRetention(settings.snapshots_retention_days)
+  }, [settings])
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
@@ -467,6 +475,12 @@ function DataTab() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSave} className="space-y-4 max-w-sm">
+            {settingsQ.isLoading && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                <RefreshCw className="h-3 w-3 animate-spin" />
+                Einstellungen werden geladen…
+              </p>
+            )}
             <div className="space-y-1.5">
               <label className="text-xs font-medium">Log-Ereignisse aufbewahren (Tage)</label>
               <Input
@@ -511,7 +525,7 @@ function DataTab() {
               </div>
             )}
 
-            <Button type="submit" size="sm" disabled={saving}>
+            <Button type="submit" size="sm" disabled={saving || settingsQ.isLoading}>
               {saving
                 ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />Wird gespeichert…</>
                 : <><Save className="h-3.5 w-3.5" />Speichern</>
