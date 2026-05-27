@@ -109,11 +109,19 @@ function KnownDevicesTab() {
   }
 
   function toggleTrust(d: KnownDevice) {
-    updateMutation.mutate({ mac: d.mac, patch: { trusted: !d.trusted, flagged: d.flagged && d.trusted ? false : d.flagged } })
+    const newTrusted = !d.trusted
+    updateMutation.mutate({
+      mac: d.mac,
+      patch: { trusted: newTrusted, ...(newTrusted && d.flagged ? { flagged: false } : {}) },
+    })
   }
 
   function toggleFlag(d: KnownDevice) {
-    updateMutation.mutate({ mac: d.mac, patch: { flagged: !d.flagged, trusted: d.trusted && d.flagged ? false : d.trusted } })
+    const newFlagged = !d.flagged
+    updateMutation.mutate({
+      mac: d.mac,
+      patch: { flagged: newFlagged, ...(newFlagged && d.trusted ? { trusted: false } : {}) },
+    })
   }
 
   function timeAgoFull(iso: string) {

@@ -216,11 +216,14 @@ export function useKnownDevices(params?: {
 export function useAuditLog(params?: {
   limit?: number; offset?: number; from?: number; to?: number; action?: string
 }) {
+  const ok = useConfigured()
   return useQuery({
     queryKey: ['history', 'audit', params],
     queryFn:  () => api.getAuditLog(params),
+    enabled:  ok,
     staleTime: 30_000,
     refetchInterval: 60_000,
+    retry: (n, err) => n < 2 && !(err instanceof ApiError && err.status === 503),
   })
 }
 

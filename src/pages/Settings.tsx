@@ -557,6 +557,7 @@ function PurgeCard() {
       setShowConfirm(false)
       qc.invalidateQueries({ queryKey: ['history', 'stats'] })
     },
+    onError: () => setShowConfirm(false),
   })
 
   const total = result

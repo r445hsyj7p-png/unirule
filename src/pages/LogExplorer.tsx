@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo } from 'react'
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import {
   Search, RefreshCw, Download, Terminal, Upload,
   FileUp, CheckCircle, AlertTriangle, X, Info
@@ -346,24 +346,46 @@ export default function LogExplorer() {
 
   const configured = useConnectionStore(s => s.configured)
 
-  // Stable `from` timestamp: recomputed only when dateRange changes, rounded to the nearest minute
+  // Tick every minute so `fromMs` stays accurate for active time-range filters
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (dateRange === 'all') return
+    const id = setInterval(() => setTick(t => t + 1), 60_000)
+    return () => clearInterval(id)
+  }, [dateRange])
+
+  // Stable `from` timestamp: recomputed when dateRange or tick (every minute) changes
   const fromMs = useMemo<number | undefined>(() => {
     if (dateRange === 'all') return undefined
     const ago: Record<string, number> = { '1h': 3_600_000, '6h': 21_600_000, '24h': 86_400_000, '7d': 604_800_000 }
     return Math.floor((Date.now() - (ago[dateRange] ?? 0)) / 60_000) * 60_000
-  }, [dateRange])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateRange, tick])
 
+  // Fetch one extra row so we can detect whether a next page exists
   const eventsQ = useHistoryEvents({
-    limit:  LOG_PAGE,
+    limit:  LOG_PAGE + 1,
     offset: page * LOG_PAGE,
     level:  levelFilter !== 'all' ? levelFilter : undefined,
     search: search || undefined,
     from:   fromMs,
   })
-  const serverLogs: UnifiLogRow[] = eventsQ.data ?? []
+  const rawServerLogs: UnifiLogRow[] = eventsQ.data ?? []
+  const hasNextPage = rawServerLogs.length > LOG_PAGE
+  const serverLogs: UnifiLogRow[] = rawServerLogs.slice(0, LOG_PAGE)
 
-  const allLogs: LogEntry[] = [...importedLogs, ...serverLogs]
-  const sources = [...new Set(allLogs.map(l => l.source))]
+  // Apply search and level filter to imported logs client-side
+  const filteredImported = importedLogs.filter(l => {
+    if (levelFilter !== 'all' && l.level !== levelFilter) return false
+    if (search) {
+      const q = search.toLowerCase()
+      if (!l.message.toLowerCase().includes(q) && !l.source.toLowerCase().includes(q) && !l.device.toLowerCase().includes(q)) return false
+    }
+    return true
+  })
+
+  const allLogs: LogEntry[] = [...filteredImported, ...serverLogs]
+  const sources = [...new Set([...importedLogs, ...serverLogs].map(l => l.source))]
 
   function handleImport(logs: ParsedLog[], filename: string) {
     setImportedLogs(prev => [...logs, ...prev])
@@ -371,7 +393,7 @@ export default function LogExplorer() {
     setTimeout(() => setImportBanner(''), 5000)
   }
 
-  // Source filter applied client-side (level/search/from are server-side)
+  // Source filter applied client-side (level/search/from are server-side for DB logs)
   const filtered = allLogs.filter(l =>
     sourceFilter === 'all' || l.source === sourceFilter
   )
@@ -610,7 +632,7 @@ export default function LogExplorer() {
       )}
 
       {/* Pagination */}
-      {(serverLogs.length === LOG_PAGE || page > 0) && (
+      {(hasNextPage || page > 0) && (
         <div className="flex items-center justify-between">
           <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}>
             ← Zurück
@@ -618,7 +640,7 @@ export default function LogExplorer() {
           <span className="text-xs text-muted-foreground">
             Seite {page + 1} · {serverLogs.length} Einträge
           </span>
-          <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={serverLogs.length < LOG_PAGE}>
+          <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={!hasNextPage}>
             Weiter →
           </Button>
         </div>
