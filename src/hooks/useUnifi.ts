@@ -2,7 +2,7 @@
  * TanStack Query hooks — all UniFi data fetching lives here.
  * When not configured → returns { notConfigured: true }.
  */
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/lib/api'
 import { useConnectionStore } from '@/lib/store'
 
@@ -128,6 +128,70 @@ export function useThreats() {
     }))
 
   return { ...events, threats }
+}
+
+// ── History events (SQLite-backed) ────────────────────────────────────────────
+
+export function useHistoryEvents(params?: {
+  limit?: number; level?: string; search?: string; from?: number; to?: number
+}) {
+  return useQuery({
+    queryKey: ['history', 'events', params],
+    queryFn:  () => api.getHistoryEvents(params),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  })
+}
+
+// ── History metrics (SQLite-backed) ──────────────────────────────────────────
+
+export function useHistoryMetrics(params?: {
+  from?: number; to?: number; resolution?: 'minute' | 'hour' | 'day'
+}) {
+  return useQuery({
+    queryKey: ['history', 'metrics', params],
+    queryFn:  () => api.getHistoryMetrics(params),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  })
+}
+
+// ── Notifications (SQLite-backed) ─────────────────────────────────────────────
+
+export function useNotifications(unreadOnly = false) {
+  const qc = useQueryClient()
+  const query = useQuery({
+    queryKey:        ['history', 'notifications', unreadOnly],
+    queryFn:         () => api.getNotifications(unreadOnly),
+    staleTime:       30_000,
+    refetchInterval: 30_000,
+  })
+  function markAllRead() {
+    return api.markNotificationsRead().then(() => {
+      qc.invalidateQueries({ queryKey: ['history', 'notifications'] })
+    })
+  }
+  return { ...query, markAllRead }
+}
+
+// ── DB stats ──────────────────────────────────────────────────────────────────
+
+export function useDbStats() {
+  return useQuery({
+    queryKey: ['history', 'stats'],
+    queryFn:  api.getDbStats,
+    staleTime: 60_000,
+  })
+}
+
+// ── App settings ──────────────────────────────────────────────────────────────
+
+export function useAppSettings() {
+  return useQuery({
+    queryKey: ['settings'],
+    queryFn:  api.getAppSettings,
+    staleTime: 60_000,
+  })
 }
 
 // ── Derived: dashboard metrics ────────────────────────────────────────────────

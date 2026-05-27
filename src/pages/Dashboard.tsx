@@ -12,7 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DataState } from '@/components/ui/empty-state'
-import { useMetrics, useThreats, useNetworks, useEvents, useFirewallRules } from '@/hooks/useUnifi'
+import { useMetrics, useThreats, useNetworks, useEvents, useFirewallRules, useHistoryMetrics } from '@/hooks/useUnifi'
 import { useConnectionStore } from '@/lib/store'
 import { severityBg, timeAgo, formatBytes } from '@/lib/utils'
 
@@ -63,8 +63,13 @@ export default function Dashboard() {
   const { metrics, isLoading, isError } = useMetrics()
   const { threats, refetch } = useThreats()
   const networksQuery = useNetworks()
-  const eventsQuery = useEvents(2000)
+  const eventsQuery = useEvents(500)   // still used for threats / blockedConnections
   const firewallQuery = useFirewallRules()
+
+  // Real time-series from SQLite metrics table
+  const now = Date.now()
+  const metrics24h = useHistoryMetrics({ from: now - 24 * 3_600_000, resolution: 'hour' })
+  const metrics7d  = useHistoryMetrics({ from: now - 7  * 86_400_000, resolution: 'day'  })
 
   // ── Zero Trust Score ───────────────────────────────────────────────────────
   const zeroTrustScore = useMemo(() => {
@@ -90,28 +95,27 @@ export default function Dashboard() {
     }
   }, [networksQuery.data, firewallQuery.data, threats])
 
-  // ── Traffic Chart (24h event frequency) ───────────────────────────────────
+  // ── Traffic Chart (24h — real bytes/s from metrics table) ─────────────────
   const trafficData = useMemo(() => {
-    const events = eventsQuery.data ?? []
-    const now = Date.now()
-    const buckets: Record<string, { time: string; inbound: number; outbound: number; blocked: number }> = {}
+    const mBuckets = metrics24h.data ?? []
+    const ts = Date.now()
+    // Pre-fill 24 hourly slots
+    const hours: Record<string, { time: string; inbound: number; outbound: number }> = {}
     for (let i = 23; i >= 0; i--) {
-      const d = new Date(now - i * 3600_000)
+      const d = new Date(ts - i * 3_600_000)
       const key = `${d.getHours().toString().padStart(2, '0')}:00`
-      buckets[key] = { time: key, inbound: 0, outbound: 0, blocked: 0 }
+      hours[key] = { time: key, inbound: 0, outbound: 0 }
     }
-    events.forEach(e => {
-      const d = new Date(e.timestamp)
-      const age = now - d.getTime()
-      if (age > 86_400_000) return
+    mBuckets.forEach(m => {
+      const d   = new Date(m.bucket)
       const key = `${d.getHours().toString().padStart(2, '0')}:00`
-      if (!buckets[key]) return
-      if (/block|deny|drop/i.test(e.message)) buckets[key].blocked++
-      else if (/allow|accept|permit/i.test(e.message)) buckets[key].inbound++
-      else buckets[key].outbound++
+      if (hours[key]) {
+        hours[key].inbound  += m.rxBytesPerSec
+        hours[key].outbound += m.txBytesPerSec
+      }
     })
-    return Object.values(buckets)
-  }, [eventsQuery.data])
+    return Object.values(hours)
+  }, [metrics24h.data])
 
   // ── Zone Distribution Pie ──────────────────────────────────────────────────
   const zoneDistribution = useMemo(() => {
@@ -146,9 +150,9 @@ export default function Dashboard() {
     return Object.values(days)
   }, [threats])
 
-  // ── Bandwidth (7-day event counts) ────────────────────────────────────────
+  // ── Bandwidth (7-day — real bytes/s aggregated per day from metrics table) ─
   const bandwidthData = useMemo(() => {
-    const events = eventsQuery.data ?? []
+    const mBuckets = metrics7d.data ?? []
     const dayNames = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa']
     const days: Record<string, { day: string; rx: number; tx: number }> = {}
     for (let i = 6; i >= 0; i--) {
@@ -157,15 +161,15 @@ export default function Dashboard() {
       const key = d.toISOString().slice(0, 10)
       days[key] = { day: dayNames[d.getDay()], rx: 0, tx: 0 }
     }
-    events.forEach(e => {
-      const key = e.timestamp.slice(0, 10)
+    mBuckets.forEach(m => {
+      const key = new Date(m.bucket).toISOString().slice(0, 10)
       if (days[key]) {
-        if (/tx|send|out/i.test(e.source)) days[key].tx++
-        else days[key].rx++
+        days[key].rx += m.rxBytesPerSec
+        days[key].tx += m.txBytesPerSec
       }
     })
     return Object.values(days)
-  }, [eventsQuery.data])
+  }, [metrics7d.data])
 
   // ── Derived stat card values ───────────────────────────────────────────────
   const blockedConnections = eventsQuery.data?.filter(e => /block|deny|drop/i.test(e.message)).length ?? 0
@@ -265,7 +269,7 @@ export default function Dashboard() {
         <Card className="lg:col-span-2">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold">Netzwerk-Traffic (24h)</CardTitle>
-            <CardDescription className="text-xs">Eingehend / Ausgehend / Blockiert (Ereignisfrequenz)</CardDescription>
+            <CardDescription className="text-xs">RX / TX — Bytes/s (Stunden-Durchschnitt)</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={220}>
@@ -273,15 +277,13 @@ export default function Dashboard() {
                 <defs>
                   <linearGradient id="inbound"  x1="0" y1="0" x2="0" y2="1"><stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.3}/><stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/></linearGradient>
                   <linearGradient id="outbound" x1="0" y1="0" x2="0" y2="1"><stop offset="5%"  stopColor="#10b981" stopOpacity={0.3}/><stop offset="95%" stopColor="#10b981" stopOpacity={0}/></linearGradient>
-                  <linearGradient id="blocked"  x1="0" y1="0" x2="0" y2="1"><stop offset="5%"  stopColor="#ef4444" stopOpacity={0.3}/><stop offset="95%" stopColor="#ef4444" stopOpacity={0}/></linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis dataKey="time" tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }} tickLine={false} axisLine={false} interval={3} />
                 <YAxis tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }} tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} />
-                <Area type="monotone" dataKey="inbound"  stroke="#3b82f6" fill="url(#inbound)"  strokeWidth={2} name="Eingehend" />
-                <Area type="monotone" dataKey="outbound" stroke="#10b981" fill="url(#outbound)" strokeWidth={2} name="Ausgehend" />
-                <Area type="monotone" dataKey="blocked"  stroke="#ef4444" fill="url(#blocked)"  strokeWidth={2} name="Blockiert" />
+                <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [`${Number(v ?? 0).toFixed(0)} B/s`]} />
+                <Area type="monotone" dataKey="inbound"  stroke="#3b82f6" fill="url(#inbound)"  strokeWidth={2} name="RX (Eingehend)" />
+                <Area type="monotone" dataKey="outbound" stroke="#10b981" fill="url(#outbound)" strokeWidth={2} name="TX (Ausgehend)" />
                 <Legend wrapperStyle={{ fontSize: '11px' }} />
               </AreaChart>
             </ResponsiveContainer>
@@ -340,7 +342,7 @@ export default function Dashboard() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold">Bandbreite (7 Tage)</CardTitle>
-            <CardDescription className="text-xs">Ereignisse/Tag</CardDescription>
+            <CardDescription className="text-xs">Bytes/s — Tages-Durchschnitt</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={200}>

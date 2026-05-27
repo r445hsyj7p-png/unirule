@@ -3,6 +3,7 @@ import {
   Save, Shield, Bell, Database,
   Palette, Upload, RotateCcw, Check, Sun, Moon, Lock,
   Eye, EyeOff, RefreshCw, CheckCircle2, AlertTriangle,
+  HardDrive, FileText, Bell as BellIcon, Cpu,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -12,6 +13,9 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useAppearanceStore, applyFont, applyFavicon, type FontChoice } from '@/lib/appearanceStore'
 import { useThemeStore } from '@/lib/themeStore'
 import { api } from '@/lib/api'
+import { useDbStats, useAppSettings } from '@/hooks/useUnifi'
+import { useQueryClient } from '@tanstack/react-query'
+import { formatBytes } from '@/lib/utils'
 
 // ── Coming Soon overlay ───────────────────────────────────────────────────────
 
@@ -337,6 +341,189 @@ function BlockedIpsCard() {
   )
 }
 
+// ── Daten Tab ─────────────────────────────────────────────────────────────────
+
+function DataTab() {
+  const qc = useQueryClient()
+  const statsQ    = useDbStats()
+  const settingsQ = useAppSettings()
+  const stats     = statsQ.data
+  const settings  = settingsQ.data
+
+  const [eventsRetention,    setEventsRetention]    = useState<string | null>(null)
+  const [metricsRetention,   setMetricsRetention]   = useState<string | null>(null)
+  const [snapshotRetention,  setSnapshotRetention]  = useState<string | null>(null)
+  const [saving,  setSaving]  = useState(false)
+  const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null)
+
+  // Use server values as defaults when loaded
+  const evVal  = eventsRetention   ?? settings?.events_retention_days    ?? '30'
+  const meVal  = metricsRetention  ?? settings?.metrics_retention_days   ?? '90'
+  const snVal  = snapshotRetention ?? settings?.snapshots_retention_days ?? '14'
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault()
+    setSaving(true)
+    setSaveMsg(null)
+    try {
+      await api.updateAppSettings({
+        events_retention_days:    evVal,
+        metrics_retention_days:   meVal,
+        snapshots_retention_days: snVal,
+      })
+      setSaveMsg({ text: 'Einstellungen gespeichert', ok: true })
+      qc.invalidateQueries({ queryKey: ['settings'] })
+      qc.invalidateQueries({ queryKey: ['history', 'stats'] })
+    } catch (err) {
+      setSaveMsg({ text: err instanceof Error ? err.message : 'Fehler beim Speichern', ok: false })
+    } finally {
+      setSaving(false)
+      setTimeout(() => setSaveMsg(null), 3000)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* DB stats card */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <HardDrive className="h-4 w-4" />
+                Datenbank-Status
+              </CardTitle>
+              <CardDescription className="text-xs mt-1">
+                SQLite · {stats ? formatBytes(stats.fileSizeBytes) : '…'}
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline" size="sm" className="h-7 text-xs gap-1.5"
+              onClick={() => { statsQ.refetch(); settingsQ.refetch() }}
+              disabled={statsQ.isFetching}
+            >
+              <RefreshCw className={`h-3 w-3 ${statsQ.isFetching ? 'animate-spin' : ''}`} />
+              Aktualisieren
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            <div className="rounded-md border bg-muted/30 px-3 py-2">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-0.5">
+                <FileText className="h-3 w-3" />
+                Ereignisse
+              </div>
+              <div className="text-xl font-bold">{stats?.eventCount?.toLocaleString('de') ?? '—'}</div>
+              {stats?.oldestEventAt && (
+                <div className="text-[10px] text-muted-foreground">
+                  seit {new Date(stats.oldestEventAt).toLocaleDateString('de-DE')}
+                </div>
+              )}
+            </div>
+            <div className="rounded-md border bg-muted/30 px-3 py-2">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-0.5">
+                <Cpu className="h-3 w-3" />
+                Metriken-Einträge
+              </div>
+              <div className="text-xl font-bold">{stats?.metricsCount?.toLocaleString('de') ?? '—'}</div>
+            </div>
+            <div className="rounded-md border bg-muted/30 px-3 py-2">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-0.5">
+                <BellIcon className="h-3 w-3" />
+                Benachrichtigungen
+              </div>
+              <div className="text-xl font-bold">{stats?.notifCount?.toLocaleString('de') ?? '—'}</div>
+              {(stats?.unreadCount ?? 0) > 0 && (
+                <div className="text-[10px] text-blue-400">{stats?.unreadCount} ungelesen</div>
+              )}
+            </div>
+            <div className="rounded-md border bg-muted/30 px-3 py-2">
+              <div className="text-xs text-muted-foreground mb-0.5">Bekannte Geräte</div>
+              <div className="text-xl font-bold">{stats?.knownDeviceCount?.toLocaleString('de') ?? '—'}</div>
+            </div>
+            <div className="rounded-md border bg-muted/30 px-3 py-2">
+              <div className="text-xs text-muted-foreground mb-0.5">Audit-Log</div>
+              <div className="text-xl font-bold">{stats?.auditCount?.toLocaleString('de') ?? '—'}</div>
+            </div>
+            <div className="rounded-md border bg-muted/30 px-3 py-2">
+              <div className="text-xs text-muted-foreground mb-0.5">DB-Größe</div>
+              <div className="text-xl font-bold">{stats ? formatBytes(stats.fileSizeBytes) : '—'}</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Retention settings */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Database className="h-4 w-4" />
+            Aufbewahrungsfristen
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Ältere Einträge werden beim nächsten Ingestion-Zyklus automatisch gelöscht.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSave} className="space-y-4 max-w-sm">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Log-Ereignisse aufbewahren (Tage)</label>
+              <Input
+                type="number" min={1} max={365}
+                value={evVal}
+                onChange={e => setEventsRetention(e.target.value)}
+                className="h-8 text-sm w-32"
+              />
+              <p className="text-[10px] text-muted-foreground">Standard: 30 · Min: 1 · Max: 365</p>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Metriken aufbewahren (Tage)</label>
+              <Input
+                type="number" min={7} max={730}
+                value={meVal}
+                onChange={e => setMetricsRetention(e.target.value)}
+                className="h-8 text-sm w-32"
+              />
+              <p className="text-[10px] text-muted-foreground">Standard: 90 · Min: 7 · Max: 730</p>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Client-Snapshots aufbewahren (Tage)</label>
+              <Input
+                type="number" min={1} max={90}
+                value={snVal}
+                onChange={e => setSnapshotRetention(e.target.value)}
+                className="h-8 text-sm w-32"
+              />
+              <p className="text-[10px] text-muted-foreground">Standard: 14 · Min: 1 · Max: 90</p>
+            </div>
+
+            {saveMsg && (
+              <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-xs ${
+                saveMsg.ok
+                  ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400'
+                  : 'border-red-500/30 bg-red-500/10 text-red-600'
+              }`}>
+                {saveMsg.ok
+                  ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                  : <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
+                {saveMsg.text}
+              </div>
+            )}
+
+            <Button type="submit" size="sm" disabled={saving}>
+              {saving
+                ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" />Wird gespeichert…</>
+                : <><Save className="h-3.5 w-3.5" />Speichern</>
+              }
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Settings() {
@@ -389,10 +576,7 @@ export default function Settings() {
             Benachrichtigungen
             <Badge variant="outline" className="ml-1.5 text-[9px] py-0 px-1">Soon</Badge>
           </TabsTrigger>
-          <TabsTrigger value="data">
-            Daten
-            <Badge variant="outline" className="ml-1.5 text-[9px] py-0 px-1">Soon</Badge>
-          </TabsTrigger>
+          <TabsTrigger value="data">Daten</TabsTrigger>
         </TabsList>
 
         {/* ── Allgemein ── */}
@@ -589,30 +773,9 @@ export default function Settings() {
           </div>
         </TabsContent>
 
-        {/* ── Daten (Coming Soon) ── */}
+        {/* ── Daten ── */}
         <TabsContent value="data" className="mt-4">
-          <div className="relative">
-            <ComingSoonOverlay />
-            <Card className="pointer-events-none select-none opacity-50">
-              <CardHeader>
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <Database className="h-4 w-4" />
-                  Datenhaltung
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Log-Aufbewahrung (Tage)</label>
-                  <div className="h-8 w-32 rounded-md border bg-muted/50" />
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Metriken-Aufbewahrung (Tage)</label>
-                  <div className="h-8 w-32 rounded-md border bg-muted/50" />
-                </div>
-                <Button size="sm" disabled><Save className="h-4 w-4" />Speichern</Button>
-              </CardContent>
-            </Card>
-          </div>
+          <DataTab />
         </TabsContent>
       </Tabs>
     </div>

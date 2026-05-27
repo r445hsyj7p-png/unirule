@@ -72,6 +72,46 @@ export const api = {
 
   getBlockedIps: () =>
     request<Array<{ ip: string; lockedAt: number; lockedUntil: number }>>('/api/auth/blocked-ips'),
+
+  // ── History (SQLite-backed) ──────────────────────────────────────────────
+  getHistoryEvents: (params?: {
+    limit?: number; offset?: number; level?: string
+    search?: string; from?: number; to?: number
+  }) => {
+    const q = new URLSearchParams()
+    if (params?.limit  !== undefined) q.set('limit',  String(params.limit))
+    if (params?.offset !== undefined) q.set('offset', String(params.offset))
+    if (params?.level  && params.level !== 'all') q.set('level',  params.level)
+    if (params?.search && params.search !== '')   q.set('search', params.search)
+    if (params?.from   !== undefined) q.set('from',   String(params.from))
+    if (params?.to     !== undefined) q.set('to',     String(params.to))
+    return request<UnifiLogRow[]>(`/api/history/events?${q}`)
+  },
+
+  getHistoryMetrics: (params?: {
+    from?: number; to?: number; resolution?: 'minute' | 'hour' | 'day'
+  }) => {
+    const q = new URLSearchParams()
+    if (params?.from)       q.set('from',       String(params.from))
+    if (params?.to)         q.set('to',         String(params.to))
+    if (params?.resolution) q.set('resolution', params.resolution)
+    return request<MetricsBucket[]>(`/api/history/metrics?${q}`)
+  },
+
+  getNotifications: (unreadOnly = false) =>
+    request<AppNotification[]>(`/api/history/notifications${unreadOnly ? '?unread=true' : ''}`),
+
+  markNotificationsRead: () =>
+    request<{ ok: boolean }>('/api/history/notifications/read-all', { method: 'POST' }),
+
+  getAppSettings: () =>
+    request<AppSettings>('/api/settings'),
+
+  updateAppSettings: (settings: Partial<AppSettings>) =>
+    request<{ ok: boolean }>('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
+
+  getDbStats: () =>
+    request<DbStats>('/api/history/stats'),
 }
 
 // ── Response types (matches server normalisation) ─────────────────────────────
@@ -111,6 +151,54 @@ export interface UnifiNetworkRow {
 export interface UnifiHealthRow {
   subsystem: string; status: string; num_user?: number
   tx_bytes_r?: number; rx_bytes_r?: number
+}
+
+// ── History / Settings types ──────────────────────────────────────────────────
+
+export interface MetricsBucket {
+  bucket:        number
+  time:          string
+  rxBytesPerSec: number
+  txBytesPerSec: number
+  activeClients: number
+  activeDevices: number
+  firewallRules: number
+}
+
+export interface AppNotification {
+  id:        number
+  createdAt: string
+  type:      string
+  severity:  string
+  title:     string
+  message:   string
+  entityId:  string | null
+  read:      boolean
+  readAt:    string | null
+}
+
+export interface AppSettings {
+  events_retention_days:    string
+  metrics_retention_days:   string
+  snapshots_retention_days: string
+  anonymize_after_days:     string
+}
+
+export interface DbStats {
+  eventCount:       number
+  notifCount:       number
+  unreadCount:      number
+  metricsCount:     number
+  knownDeviceCount: number
+  auditCount:       number
+  fileSizeBytes:    number
+  oldestEventAt:    string | null
+  settings: {
+    eventsRetentionDays:    number
+    metricsRetentionDays:   number
+    snapshotsRetentionDays: number
+    anonymizeAfterDays:     number
+  }
 }
 
 // ── Simulation types ──────────────────────────────────────────────────────────

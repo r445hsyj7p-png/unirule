@@ -24,6 +24,13 @@ import {
 } from './auth.js'
 import { simulatePacket } from './simulate.js'
 import { lookupOui, inferCategory } from './oui.js'
+import { startIngestion } from './ingestion.js'
+import {
+  handleHistoryEvents, handleHistoryMetrics,
+  handleGetNotifications, handleMarkNotificationsRead,
+  handleGetSettings, handleUpdateSettings,
+  handleDbStats, writeAuditLog,
+} from './history.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -77,6 +84,11 @@ function saveConfig(cfg: UnifiConfig) {
 
 loadPersistedConfig()
 
+// Start background ingestion if already configured on boot
+if (getUnifiConfig()) {
+  startIngestion()
+}
+
 // ── Helper ────────────────────────────────────────────────────────────────────
 
 function apiError(res: express.Response, err: unknown, status = 500) {
@@ -113,6 +125,7 @@ app.post('/api/config', async (req, res) => {
     }
     setUnifiConfig(cfg)
     saveConfig(cfg)
+    startIngestion()  // idempotent — noop if already running
     return res.json({ ok: true, site: test.siteName, version: test.version })
   } catch (e) {
     return apiError(res, e)
@@ -317,6 +330,15 @@ app.get('/api/unifi/alarms', async (_req, res) => {
   } catch (e) { return apiError(res, e) }
 })
 
+// ── History & settings routes ─────────────────────────────────────────────────
+app.get ('/api/history/events',                  handleHistoryEvents)
+app.get ('/api/history/metrics',                 handleHistoryMetrics)
+app.get ('/api/history/notifications',           handleGetNotifications)
+app.post('/api/history/notifications/read-all',  handleMarkNotificationsRead)
+app.get ('/api/settings',                        handleGetSettings)
+app.put ('/api/settings',                        handleUpdateSettings)
+app.get ('/api/history/stats',                   handleDbStats)
+
 // ── Firewall toggle ───────────────────────────────────────────────────────────
 // PATCH /api/unifi/firewall/:id  { enabled: boolean }
 app.patch('/api/unifi/firewall/:id', async (req, res) => {
@@ -328,6 +350,19 @@ app.patch('/api/unifi/firewall/:id', async (req, res) => {
   try {
     const client = getUnifiClient()
     const updated = await client.updateFirewallRule(id, { enabled })
+    // Audit log (fire-and-forget, non-fatal)
+    const clientIp = (typeof req.headers['x-forwarded-for'] === 'string'
+      ? req.headers['x-forwarded-for'].split(',')[0].trim()
+      : req.socket?.remoteAddress) ?? ''
+    writeAuditLog({
+      action:     enabled ? 'enable' : 'disable',
+      entityType: 'firewall_rule',
+      entityId:   id,
+      entityName: updated.name,
+      oldValue:   String(!enabled),
+      newValue:   String(enabled),
+      userIp:     clientIp,
+    })
     return res.json({
       id: updated._id,
       name: updated.name,

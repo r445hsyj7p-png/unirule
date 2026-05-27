@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { useEvents } from '@/hooks/useUnifi'
+import { useHistoryEvents } from '@/hooks/useUnifi'
 import { useConnectionStore } from '@/lib/store'
 import type { UnifiLogRow } from '@/lib/api'
 import { DataState } from '@/components/ui/empty-state'
@@ -340,7 +340,7 @@ export default function LogExplorer() {
   const [importBanner, setImportBanner] = useState('')
 
   const configured = useConnectionStore(s => s.configured)
-  const eventsQ = useEvents(2000)
+  const eventsQ = useHistoryEvents({ limit: 2000 })
   const apiLogs: UnifiLogRow[] = eventsQ.data ?? []
 
   const allLogs: LogEntry[] = [...importedLogs, ...apiLogs]
@@ -375,8 +375,8 @@ export default function LogExplorer() {
           <h1 className="text-2xl font-bold">Log Explorer</h1>
           <p className="text-muted-foreground text-sm mt-0.5">
             {importedLogs.length > 0
-              ? `${importedLogs.length} importierte + ${apiLogs.length} Live-Einträge`
-              : 'Echtzeit-Logs aus allen Quellen'}
+              ? `${importedLogs.length} importierte + ${apiLogs.length} gespeicherte Einträge`
+              : `${apiLogs.length} gespeicherte Einträge · wird alle 60s aktualisiert`}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -388,7 +388,7 @@ export default function LogExplorer() {
             <FileUp className="h-4 w-4" />
             Logs importieren
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => eventsQ.refetch()}>
             <RefreshCw className="h-4 w-4" />
             Aktualisieren
           </Button>
@@ -505,7 +505,7 @@ export default function LogExplorer() {
 
       {/* Empty live logs notice */}
       {configured && apiLogs.length === 0 && !eventsQ.isLoading && importedLogs.length === 0 && (
-        <DataState empty emptyText="Keine Live-Logs verfügbar" />
+        <DataState empty emptyText="Noch keine Logs gespeichert — Hintergrund-Ingestion läuft alle 30 Sekunden." />
       )}
 
       {/* Log display */}
