@@ -188,17 +188,42 @@ function UnifiControllerSection() {
 
       {expanded && (
         <CardContent className="space-y-4">
-          {/* API-Endpunkt Info */}
-          <div className="rounded-lg bg-muted/40 border p-3 text-xs space-y-1.5">
-            <div className="font-semibold text-muted-foreground uppercase text-[10px] mb-2">Wichtige API-Endpunkte</div>
-            <div className="font-mono space-y-1 text-muted-foreground">
-              <div><span className="text-blue-400">POST</span> /api/login → Session</div>
-              <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/sta → Clients</div>
-              <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/device → Geräte</div>
-              <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/event → Events/Logs</div>
-              <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/rest/firewallrule → FW-Regeln</div>
-              <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/rest/networkconf → VLANs/Zonen</div>
+          {/* Hinweis: API-Keys nicht unterstützt */}
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs space-y-1">
+            <div className="font-medium text-amber-600 dark:text-amber-400">Lokaler Admin erforderlich</div>
+            <p className="text-muted-foreground">
+              Bitte einen <strong>lokalen Admin-Account</strong> anlegen (in der UniFi-App unter
+              Admins &amp; Users → Lokaler Zugang), nicht den UI.com-SSO-Account verwenden.
+              API-Keys unterstützen nur die offizielle Integration-API
+              (<code className="text-[10px]">/proxy/network/integration/v1/</code>),
+              die weder Events, Firewall-Regeln noch Write-Zugriff abdeckt.
+            </p>
+          </div>
+
+          {/* API-Endpunkte nach Controller-Typ */}
+          <div className="rounded-lg bg-muted/40 border p-3 text-xs space-y-2">
+            <div className="font-semibold text-muted-foreground uppercase text-[10px]">API-Pfade je nach Controller-Typ</div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              <div className="text-[10px] font-medium text-muted-foreground">UniFi OS (UDM, UCG-Ultra, CK Gen2+)</div>
+              <div className="text-[10px] font-medium text-muted-foreground">Classic (self-hosted, Port 8443)</div>
+              <div className="font-mono text-muted-foreground col-span-1 space-y-0.5">
+                <div><span className="text-blue-400">POST</span> /api/auth/login</div>
+                <div><span className="text-green-400">GET</span>  /proxy/network/api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/sta</div>
+                <div><span className="text-green-400">GET</span>  /proxy/network/api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/device</div>
+                <div><span className="text-green-400">GET</span>  /proxy/network/api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/event</div>
+                <div><span className="text-green-400">GET</span>  /proxy/network/api/s/<span className="text-yellow-400">{'{site}'}</span>/rest/firewallrule</div>
+              </div>
+              <div className="font-mono text-muted-foreground col-span-1 space-y-0.5">
+                <div><span className="text-blue-400">POST</span> /api/login</div>
+                <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/sta</div>
+                <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/device</div>
+                <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/stat/event</div>
+                <div><span className="text-green-400">GET</span>  /api/s/<span className="text-yellow-400">{'{site}'}</span>/rest/firewallrule</div>
+              </div>
             </div>
+            <p className="text-[10px] text-muted-foreground pt-1">
+              Der Controller-Typ wird beim Verbindungstest automatisch erkannt — der Verbindungstest zeigt <em>UniFi OS</em> oder <em>Classic</em>.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">

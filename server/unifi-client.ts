@@ -1,7 +1,21 @@
 /**
  * UniFi Controller API Client
- * Handles authentication, session management and data retrieval.
- * Bypasses self-signed TLS certificates (common on UniFi devices).
+ *
+ * Supports two controller variants automatically detected during login:
+ *
+ *   Classic self-hosted Network Application (port 8443)
+ *     login  → POST /api/login
+ *     paths  → /api/s/{site}/…
+ *
+ *   UniFi OS consoles — UDM, UDM-Pro, UDM-SE, UCG-Ultra, CloudKey Gen2+ (port 443)
+ *     login  → POST /api/auth/login
+ *     paths  → /proxy/network/api/s/{site}/…
+ *     mutate → X-CSRF-Token header required on POST / PUT / DELETE / PATCH
+ *
+ * API key authentication is intentionally not supported here: Ubiquiti's official
+ * API key only covers the /proxy/network/integration/v1/ endpoints which do not yet
+ * expose events, firewall rules, or write operations. Use a local admin account
+ * (not a UI.com SSO account) to avoid MFA prompts.
  */
 
 import https from 'node:https'
@@ -103,7 +117,9 @@ export interface UnifiHealth {
 export class UnifiClient {
   private http: AxiosInstance
   private config: UnifiConfig
-  private loggedIn = false
+  private loggedIn  = false
+  private isUnifiOs = false           // true → /proxy/network/ prefix + CSRF
+  private csrfToken: string | null = null
 
   constructor(config: UnifiConfig) {
     this.config = config
@@ -115,12 +131,21 @@ export class UnifiClient {
       headers: { 'Content-Type': 'application/json' },
     })
 
-    // Fix 3: re-authenticate automatically when session cookie expires (401).
-    // Guards:
-    //   - _retry flag prevents infinite loop when login() succeeds but the
-    //     retried request still returns 401 (e.g. insufficient privileges).
-    //   - err.config guard avoids TypeError for pre-dispatch errors where
-    //     axios does not attach a config object.
+    // UniFi OS requires X-CSRF-Token on all state-changing requests.
+    // The token is captured from the login response and refreshed on re-login.
+    this.http.interceptors.request.use(cfg => {
+      if (
+        this.isUnifiOs && this.csrfToken &&
+        cfg.method && ['post', 'put', 'delete', 'patch'].includes(cfg.method.toLowerCase())
+      ) {
+        cfg.headers['X-CSRF-Token'] = this.csrfToken
+      }
+      return cfg
+    })
+
+    // Re-authenticate automatically when session cookie expires (401).
+    // _retry flag prevents infinite loops when re-login succeeds but the
+    // retried request still returns 401 (e.g. insufficient privileges).
     this.http.interceptors.response.use(
       res => res,
       async (err) => {
@@ -142,19 +167,29 @@ export class UnifiClient {
 
   private get site() { return this.config.site || 'default' }
 
+  /**
+   * Path prefix injected before every classic API call.
+   * UniFi OS routes the Network Application API through its reverse proxy.
+   */
+  private get apiBase() { return this.isUnifiOs ? '/proxy/network' : '' }
+
   async login(): Promise<void> {
-    // Try new UniFi OS API first (UDM / Cloud Key Gen2)
+    // ── UniFi OS (UDM, UCG-Ultra, CloudKey Gen2+, …) ─────────────────────────
     try {
-      await this.http.post('/api/auth/login', {
+      const res = await this.http.post('/api/auth/login', {
         username: this.config.username,
         password: this.config.password,
       })
-      this.loggedIn = true
+      this.loggedIn  = true
+      this.isUnifiOs = true
+      // Capture CSRF token — required on every subsequent mutating request
+      this.csrfToken = (res.headers['x-csrf-token'] as string | undefined) ?? null
       return
     } catch {
-      // fall through to classic API
+      // not a UniFi OS device — fall through to classic controller
     }
-    // Classic UniFi Controller (v5/v6)
+
+    // ── Classic self-hosted Network Application (v5/v6, port 8443) ───────────
     const res = await this.http.post('/api/login', {
       username: this.config.username,
       password: this.config.password,
@@ -162,14 +197,18 @@ export class UnifiClient {
     if (res.data?.meta?.rc !== 'ok') {
       throw new Error(`Login failed: ${res.data?.meta?.msg ?? 'Unknown error'}`)
     }
-    this.loggedIn = true
+    this.loggedIn  = true
+    this.isUnifiOs = false
+    this.csrfToken = null
   }
 
   async logout(): Promise<void> {
     try {
-      await this.http.post('/api/logout')
+      const path = this.isUnifiOs ? '/api/auth/logout' : '/api/logout'
+      await this.http.post(path)
     } catch { /* ignore */ }
-    this.loggedIn = false
+    this.loggedIn  = false
+    this.csrfToken = null
   }
 
   private async ensureLoggedIn() {
@@ -178,7 +217,7 @@ export class UnifiClient {
 
   private async get<T>(path: string): Promise<T[]> {
     await this.ensureLoggedIn()
-    const res = await this.http.get(`/api/s/${this.site}/${path}`)
+    const res = await this.http.get(`${this.apiBase}/api/s/${this.site}/${path}`)
     return res.data?.data ?? res.data ?? []
   }
 
@@ -235,29 +274,30 @@ export class UnifiClient {
   /**
    * Toggle or partially update a firewall rule.
    *
-   * UniFi Classic Controller (v5/v6) treats PUT as a full *replace*, not a
-   * merge-patch — sending only { enabled: false } would zero all other fields.
-   * We therefore GET the current rule first, merge the patch over it, and PUT
-   * the complete merged object.
+   * The classic API treats PUT as a full replace — sending only { enabled: false }
+   * would zero all other fields. We therefore GET the current rule first, merge
+   * the patch over it, and PUT the complete merged object.
    */
   async updateFirewallRule(id: string, patch: Partial<UnifiFirewallRule>): Promise<UnifiFirewallRule> {
     await this.ensureLoggedIn()
-    // 1. Fetch the current full rule state
-    const getRes = await this.http.get(`/api/s/${this.site}/rest/firewallrule/${id}`)
+    const getRes = await this.http.get(`${this.apiBase}/api/s/${this.site}/rest/firewallrule/${id}`)
     const current = (getRes.data?.data?.[0] ?? getRes.data) as UnifiFirewallRule
-    // 2. Merge patch over the full object — PUT body is always the complete rule
-    const merged = { ...current, ...patch }
-    const putRes = await this.http.put(`/api/s/${this.site}/rest/firewallrule/${id}`, merged)
+    const merged  = { ...current, ...patch }
+    const putRes  = await this.http.put(`${this.apiBase}/api/s/${this.site}/rest/firewallrule/${id}`, merged)
     return (putRes.data?.data?.[0] ?? putRes.data) as UnifiFirewallRule
   }
 
-  /** Test connectivity — returns site info */
+  /**
+   * Test connectivity — detects controller type, then verifies the data path.
+   * Returns { ok, siteName, version } where version carries the detected type.
+   */
   async testConnection(): Promise<{ ok: boolean; siteName?: string; version?: string }> {
     try {
       await this.login()
-      const res = await this.http.get('/api/self')
-      const info = res.data?.data?.[0] ?? {}
-      return { ok: true, siteName: this.site, version: info.ui_version }
+      const type = this.isUnifiOs ? 'UniFi OS' : 'Classic'
+      // Verify the full proxied path works, not just the auth endpoint
+      await this.http.get(`${this.apiBase}/api/s/${this.site}/stat/health`)
+      return { ok: true, siteName: this.site, version: type }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       return { ok: false, siteName: undefined, version: msg }
