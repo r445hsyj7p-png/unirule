@@ -768,12 +768,6 @@ function ToggleSwitch({ checked, onChange }: { checked: boolean; onChange: (v: b
 
 // ── Generic boolean-settings tab (Phase 4) ───────────────────────────────────
 
-/**
- * Reusable card that renders a list of boolean toggles backed by a TanStack
- * Query hook + mutation.  Fixes:
- *   • Save button disabled when the GET query errored (prevents mutating DEFAULTS)
- *   • setTimeout ID stored in a ref and cleared on unmount / re-trigger
- */
 function SettingsToggleTab<T extends { [K in keyof T]: boolean }>({
   data,
   isLoading,
@@ -805,9 +799,10 @@ function SettingsToggleTab<T extends { [K in keyof T]: boolean }>({
   const [local,   setLocal]   = useState<T | null>(null)
   const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null)
 
-  // Initialise local state once data arrives
+  // Seed local from server data on first arrival; functional form avoids adding
+  // `local` to the dep array while still reading the latest committed state.
   useEffect(() => {
-    if (data && local === null) setLocal(data)
+    if (data) setLocal(prev => prev ?? data)
   }, [data])
 
   // Clear any pending banner timer on unmount
@@ -825,6 +820,11 @@ function SettingsToggleTab<T extends { [K in keyof T]: boolean }>({
     mutationFn,
     onSuccess: () => {
       setSaveMsg({ text: successMsg, ok: true })
+      // Reset local so the next data arrival (from the invalidation refetch)
+      // re-seeds the UI from what the server actually stored.
+      // TanStack keeps stale data in the cache during refetch, so `current`
+      // falls back to the old `data` — not to `defaults` — until fresh data arrives.
+      setLocal(null)
       qc.invalidateQueries({ queryKey })
       if (timerRef.current) clearTimeout(timerRef.current)
       timerRef.current = setTimeout(() => setSaveMsg(null), 3000)
@@ -848,6 +848,12 @@ function SettingsToggleTab<T extends { [K in keyof T]: boolean }>({
           <p className="text-xs text-muted-foreground flex items-center gap-1.5">
             <RefreshCw className="h-3 w-3 animate-spin" />Einstellungen werden geladen…
           </p>
+        )}
+        {isError && (
+          <div className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            Einstellungen konnten nicht geladen werden
+          </div>
         )}
         {items.map(({ key, label, desc }) => (
           <div key={key} className="flex items-center justify-between gap-4">
