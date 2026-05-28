@@ -536,6 +536,44 @@ export function handlePurgeData(_req: express.Request, res: express.Response) {
   }
 }
 
+// ── Phase 9: Anomaly log ──────────────────────────────────────────────────────
+
+export function handleGetAnomalies(req: express.Request, res: express.Response) {
+  try {
+    const db    = getDb()
+    const limit = Math.min(parseInt(String(req.query.limit ?? '100'), 10) || 100, 500)
+    const from  = typeof req.query.from === 'string' ? parseInt(req.query.from, 10) : null
+
+    let sql = `
+      SELECT id, detected_at, mac, metric, observed, expected_avg, expected_std, z_score, severity
+      FROM anomalies WHERE 1=1`
+    const params: (string | number)[] = []
+    if (from !== null) { sql += ' AND detected_at >= ?'; params.push(from) }
+    sql += ' ORDER BY detected_at DESC LIMIT ?'
+    params.push(limit)
+
+    const rows = db.prepare(sql).all(...params) as Array<{
+      id: number; detected_at: number; mac: string; metric: string
+      observed: number; expected_avg: number; expected_std: number
+      z_score: number; severity: string
+    }>
+
+    return res.json(rows.map(r => ({
+      id:          r.id,
+      detectedAt:  r.detected_at,
+      mac:         r.mac,
+      metric:      r.metric,
+      observed:    r.observed,
+      expectedAvg: r.expected_avg,
+      expectedStd: r.expected_std,
+      zScore:      r.z_score,
+      severity:    r.severity,
+    })))
+  } catch (e) {
+    return res.status(500).json({ error: String(e) })
+  }
+}
+
 // ── CSV export ────────────────────────────────────────────────────────────────
 
 export function handleExportEventsCsv(req: express.Request, res: express.Response) {

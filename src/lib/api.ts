@@ -178,6 +178,25 @@ export const api = {
     request<{ ok: boolean }>('/api/settings/notifications', {
       method: 'PUT', body: JSON.stringify(s),
     }),
+
+  // ── Phase 5: Syslog ───────────────────────────────────────────────────────
+  getSyslogStatus: () =>
+    request<SyslogStatus>('/api/syslog/status'),
+
+  startSyslog: (port: number, proto: 'udp' | 'tcp') =>
+    request<SyslogStatus & { ok: boolean }>('/api/syslog/start', {
+      method: 'POST', body: JSON.stringify({ port, proto }),
+    }),
+
+  stopSyslog: () =>
+    request<{ ok: boolean }>('/api/syslog/stop', { method: 'POST' }),
+
+  // ── Phase 9: Anomalies ────────────────────────────────────────────────────
+  getAnomalies: (limit = 100, from?: number) => {
+    const q = new URLSearchParams({ limit: String(limit) })
+    if (from !== undefined) q.set('from', String(from))
+    return request<AnomalyRow[]>(`/api/anomalies?${q}`)
+  },
 }
 
 // ── Phase 3 types ─────────────────────────────────────────────────────────────
@@ -240,6 +259,31 @@ export interface NotificationSettings {
   dailyDigest:       boolean
   newDevices:        boolean
   policyApprovals:   boolean
+}
+
+// ── Phase 5 types ─────────────────────────────────────────────────────────────
+
+export interface SyslogStatus {
+  running:       boolean
+  port:          number
+  proto:         string
+  receivedCount: number
+  startedAt:     number | null
+  error:         string | null
+}
+
+// ── Phase 9 types ─────────────────────────────────────────────────────────────
+
+export interface AnomalyRow {
+  id:          number
+  detectedAt:  number
+  mac:         string
+  metric:      string
+  observed:    number
+  expectedAvg: number
+  expectedStd: number
+  zScore:      number
+  severity:    string
 }
 
 // ── Response types (matches server normalisation) ─────────────────────────────

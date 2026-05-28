@@ -11,6 +11,7 @@
 import { getDb, getSettingInt } from './db.js'
 import { getUnifiClient, type UnifiClient as UClient, type UnifiDevice, type UnifiEvent } from './unifi-client.js'
 import { normalizeEvent } from './event-normalize.js'
+import { runAnomalyDetection } from './anomaly.js'
 
 const intervals: ReturnType<typeof setInterval>[] = []
 let running = false
@@ -21,15 +22,17 @@ export function startIngestion(): void {
   console.log('[ingestion] Background jobs starting…')
 
   // Kick off immediately, then repeat
-  void runSafe(ingestEvents,    'EventIngester')
-  void runSafe(snapshotClients, 'ClientSnapshotter')
-  void runSafe(snapshotDevices, 'DeviceSnapshotter')
-  void runSafe(ingestMetrics,   'MetricsIngester')
+  void runSafe(ingestEvents,       'EventIngester')
+  void runSafe(snapshotClients,    'ClientSnapshotter')
+  void runSafe(snapshotDevices,    'DeviceSnapshotter')
+  void runSafe(ingestMetrics,      'MetricsIngester')
+  void runSafe(runAnomalyDetection,'AnomalyDetector')
 
-  intervals.push(setInterval(() => void runSafe(ingestEvents,    'EventIngester'),    30_000))
-  intervals.push(setInterval(() => void runSafe(snapshotClients, 'ClientSnapshotter'), 5 * 60_000))
-  intervals.push(setInterval(() => void runSafe(snapshotDevices, 'DeviceSnapshotter'), 5 * 60_000))
-  intervals.push(setInterval(() => void runSafe(ingestMetrics,   'MetricsIngester'),  60_000))
+  intervals.push(setInterval(() => void runSafe(ingestEvents,       'EventIngester'),     30_000))
+  intervals.push(setInterval(() => void runSafe(snapshotClients,    'ClientSnapshotter'),  5 * 60_000))
+  intervals.push(setInterval(() => void runSafe(snapshotDevices,    'DeviceSnapshotter'),  5 * 60_000))
+  intervals.push(setInterval(() => void runSafe(ingestMetrics,      'MetricsIngester'),   60_000))
+  intervals.push(setInterval(() => void runSafe(runAnomalyDetection,'AnomalyDetector'),   5 * 60_000))
 }
 
 export function stopIngestion(): void {

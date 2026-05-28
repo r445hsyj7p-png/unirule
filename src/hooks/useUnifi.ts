@@ -255,6 +255,30 @@ export function useNotificationSettings() {
   })
 }
 
+// ── Phase 5: Syslog status ────────────────────────────────────────────────────
+
+export function useSyslogStatus() {
+  return useQuery({
+    queryKey:        ['syslog', 'status'],
+    queryFn:         api.getSyslogStatus,
+    staleTime:       5_000,
+    refetchInterval: 10_000,
+    retry:           false,
+  })
+}
+
+// ── Phase 9: Anomalies ────────────────────────────────────────────────────────
+
+export function useAnomalies(limit = 100) {
+  return useQuery({
+    queryKey:        ['anomalies', limit],
+    queryFn:         () => api.getAnomalies(limit),
+    staleTime:       60_000,
+    refetchInterval: 5 * 60_000,
+    retry:           false,
+  })
+}
+
 // ── Derived: dashboard metrics ────────────────────────────────────────────────
 
 export function useMetrics() {

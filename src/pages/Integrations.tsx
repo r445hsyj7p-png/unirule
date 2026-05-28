@@ -2,7 +2,7 @@ import { useState } from 'react'
 import {
   Plug, RefreshCw, CheckCircle, XCircle, Clock,
   ExternalLink, ChevronDown, ChevronUp, Eye, EyeOff,
-  Wifi, Activity, Shield, GitBranch, BarChart2, Terminal, Network,
+  Wifi, Activity, Shield, GitBranch, BarChart2, Terminal, Network, Square,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -13,6 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { timeAgo } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { useConnectionStore } from '@/lib/store'
+import { useQueryClient } from '@tanstack/react-query'
+import { useSyslogStatus } from '@/hooks/useUnifi'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -421,11 +423,50 @@ function UnifiPollerSection() {
 
 function SyslogSection() {
   const [port, setPort] = useState('514')
-  const [proto, setProto] = useState('udp')
+  const [proto, setProto] = useState<'udp' | 'tcp'>('udp')
   const [expanded, setExpanded] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const qc = useQueryClient()
+  const { data: syslogStatus } = useSyslogStatus()
+
+  const isRunning = syslogStatus?.running ?? false
+  const displayStatus = isRunning ? 'connected' : actionError ? 'error' : 'idle'
+
+  async function handleStart() {
+    const parsedPort = parseInt(port, 10)
+    if (!parsedPort || parsedPort < 1 || parsedPort > 65535) {
+      setActionError('Ungültiger Port (1–65535)')
+      return
+    }
+    setLoading(true)
+    setActionError(null)
+    try {
+      await api.startSyslog(parsedPort, proto)
+      qc.invalidateQueries({ queryKey: ['syslog', 'status'] })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleStop() {
+    setLoading(true)
+    setActionError(null)
+    try {
+      await api.stopSyslog()
+      qc.invalidateQueries({ queryKey: ['syslog', 'status'] })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
-    <Card>
+    <Card className={isRunning ? 'border-green-500/30' : ''}>
       <CardHeader className="pb-3 cursor-pointer select-none" onClick={() => setExpanded(e => !e)}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -433,7 +474,12 @@ function SyslogSection() {
             <div>
               <CardTitle className="text-sm flex items-center gap-2">
                 Syslog-Empfänger (Remote Logging)
-                <StatusBadge status="idle" />
+                <StatusBadge status={displayStatus} />
+                {isRunning && (
+                  <span className="text-[10px] text-muted-foreground font-normal">
+                    :{syslogStatus?.port} {syslogStatus?.proto?.toUpperCase()} · {syslogStatus?.receivedCount} Nachrichten
+                  </span>
+                )}
               </CardTitle>
               <CardDescription className="text-xs mt-0.5">
                 UniFi sendet Logs direkt an Unirule
@@ -448,43 +494,64 @@ function SyslogSection() {
           <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-3 text-xs">
             <div className="font-semibold text-blue-400 mb-2">UniFi Controller einrichten</div>
             <div className="text-muted-foreground space-y-1">
-              <div>1. UniFi Controller → <strong>Settings → System → Logging</strong></div>
+              <div>1. UniFi App → <strong>Settings → System → Logging</strong></div>
               <div>2. <strong>Remote Logging</strong> aktivieren</div>
               <div>3. Server-IP: <code className="bg-muted px-1 rounded">IP-DIESES-SERVERS</code>, Port: <code className="bg-muted px-1 rounded">{port}</code></div>
               <div>4. Protokoll: <code className="bg-muted px-1 rounded">{proto.toUpperCase()}</code></div>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Lausch-Port</label>
-              <Input value={port} onChange={e => setPort(e.target.value)} className="h-8 text-sm w-24" />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Protokoll</label>
-              <Select value={proto} onValueChange={setProto}>
-                <SelectTrigger className="h-8 text-sm w-28"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="udp">UDP (Standard)</SelectItem>
-                  <SelectItem value="tcp">TCP</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground mb-2 block">rsyslog-Konfiguration (Server-seitig)</label>
-            <pre className="bg-muted/50 border rounded-md p-3 text-[11px] font-mono whitespace-pre-wrap">{`# /etc/rsyslog.d/unirule.conf
-module(load="im${proto}") 
-input(type="im${proto}" port="${port}")
 
-# UniFi Logs in Datei schreiben
-if $fromhost-ip startswith "192.168.1." then {
-  action(type="omfile" file="/var/log/unifi/unifi.log")
-}`}</pre>
+          {!isRunning && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Lausch-Port</label>
+                <Input value={port} onChange={e => setPort(e.target.value)} className="h-8 text-sm w-24" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Protokoll</label>
+                <Select value={proto} onValueChange={v => setProto(v as 'udp' | 'tcp')}>
+                  <SelectTrigger className="h-8 text-sm w-28"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="udp">UDP (Standard)</SelectItem>
+                    <SelectItem value="tcp">TCP</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+
+          {isRunning && (
+            <div className="rounded-md border border-green-500/20 bg-green-500/5 p-3 text-xs space-y-1">
+              <div className="font-medium text-green-500">Empfänger aktiv</div>
+              <div className="text-muted-foreground">
+                Lauscht auf Port <strong>{syslogStatus?.port}</strong> ({syslogStatus?.proto?.toUpperCase()})
+                · {syslogStatus?.receivedCount} Nachrichten empfangen
+              </div>
+              {syslogStatus?.startedAt && (
+                <div className="text-muted-foreground">Gestartet: {timeAgo(new Date(syslogStatus.startedAt))}</div>
+              )}
+            </div>
+          )}
+
+          {actionError && (
+            <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md p-2">
+              Fehler: {actionError}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            {!isRunning ? (
+              <Button size="sm" onClick={handleStart} disabled={loading}>
+                {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
+                Empfänger starten
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" onClick={handleStop} disabled={loading}>
+                {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+                Empfänger stoppen
+              </Button>
+            )}
           </div>
-          <Button size="sm">
-            <Activity className="h-4 w-4" />
-            Empfänger starten
-          </Button>
         </CardContent>
       )}
     </Card>

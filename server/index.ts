@@ -12,6 +12,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import bcrypt from 'bcryptjs'
+import { getDb } from './db.js'
 import {
   setUnifiConfig, getUnifiClient, getUnifiConfig, clearUnifiConfig, UnifiClient,
   type UnifiConfig, type UnifiDevice, type UnifiClient as UClient,
@@ -26,6 +27,7 @@ import { simulatePacket } from './simulate.js'
 import { lookupOui, inferCategory } from './oui.js'
 import { startIngestion, stopIngestion } from './ingestion.js'
 import { normalizeEvent } from './event-normalize.js'
+import { startSyslog, stopSyslog, getSyslogStatus } from './syslog.js'
 import {
   handleHistoryEvents, handleHistoryMetrics,
   handleGetNotifications, handleMarkNotificationsRead,
@@ -35,6 +37,7 @@ import {
   handleGetAuditLog, handlePurgeData, handleExportEventsCsv,
   handleGetSecuritySettings, handleUpdateSecuritySettings,
   handleGetNotificationSettings, handleUpdateNotificationSettings,
+  handleGetAnomalies,
 } from './history.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -93,6 +96,23 @@ loadPersistedConfig()
 if (getUnifiConfig()) {
   startIngestion()
 }
+
+// Auto-start syslog listener if it was enabled previously
+async function startSyslogIfEnabled(): Promise<void> {
+  try {
+    const db      = getDb()
+    const enabled = db.prepare("SELECT value FROM settings WHERE key = 'syslog_enabled'").get() as { value: string } | undefined
+    if (enabled?.value !== '1') return
+    const portRow  = db.prepare("SELECT value FROM settings WHERE key = 'syslog_port'").get()  as { value: string } | undefined
+    const protoRow = db.prepare("SELECT value FROM settings WHERE key = 'syslog_proto'").get() as { value: string } | undefined
+    const port  = parseInt(portRow?.value  ?? '514', 10) || 514
+    const proto = protoRow?.value === 'tcp' ? 'tcp' : 'udp'
+    await startSyslog(port, proto)
+  } catch (err) {
+    console.warn('[syslog] Auto-start failed:', err instanceof Error ? err.message : String(err))
+  }
+}
+void startSyslogIfEnabled()
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
@@ -348,6 +368,54 @@ app.get('/api/settings/security',       requireAuth, handleGetSecuritySettings)
 app.put('/api/settings/security',       requireAuth, handleUpdateSecuritySettings)
 app.get('/api/settings/notifications',  requireAuth, handleGetNotificationSettings)
 app.put('/api/settings/notifications',  requireAuth, handleUpdateNotificationSettings)
+
+// Phase 5: Syslog routes
+app.get('/api/syslog/status', requireAuth, (_req, res) => {
+  return res.json(getSyslogStatus())
+})
+
+app.post('/api/syslog/start', requireAuth, async (req, res) => {
+  const body  = req.body as { port?: unknown; proto?: unknown }
+  const port  = (typeof body.port  === 'number' ? body.port  : parseInt(String(body.port  ?? '514'), 10)) || 514
+  const proto = body.proto === 'tcp' ? 'tcp' : 'udp'
+  if (port < 1 || port > 65535) {
+    return res.status(400).json({ error: 'INVALID_PORT', message: 'Port must be 1–65535' })
+  }
+  try {
+    await startSyslog(port, proto)
+    // Persist settings so the listener auto-starts on next boot
+    const db   = getDb()
+    const stmt = db.prepare(
+      'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ' +
+      'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+    )
+    const now = Date.now()
+    db.transaction(() => {
+      stmt.run('syslog_enabled', '1',         now)
+      stmt.run('syslog_port',   String(port), now)
+      stmt.run('syslog_proto',  proto,        now)
+    })()
+    return res.json({ ok: true, ...getSyslogStatus() })
+  } catch (e) {
+    return apiError(res, e)
+  }
+})
+
+app.post('/api/syslog/stop', requireAuth, (_req, res) => {
+  try {
+    stopSyslog()
+    getDb().prepare(
+      'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ' +
+      'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+    ).run('syslog_enabled', '0', Date.now())
+    return res.json({ ok: true })
+  } catch (e) {
+    return apiError(res, e)
+  }
+})
+
+// Phase 9: Anomaly routes
+app.get('/api/anomalies', requireAuth, handleGetAnomalies)
 
 // ── Firewall toggle ───────────────────────────────────────────────────────────
 // PATCH /api/unifi/firewall/:id  { enabled: boolean }
