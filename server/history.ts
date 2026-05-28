@@ -540,9 +540,11 @@ export function handlePurgeData(_req: express.Request, res: express.Response) {
 
 export function handleGetAnomalies(req: express.Request, res: express.Response) {
   try {
-    const db    = getDb()
-    const limit = Math.min(parseInt(String(req.query.limit ?? '100'), 10) || 100, 500)
-    const from  = typeof req.query.from === 'string' ? parseInt(req.query.from, 10) : null
+    const db      = getDb()
+    const limitRaw = parseInt(String(req.query.limit ?? '100'), 10)
+    const limit   = Math.min(Number.isNaN(limitRaw) || limitRaw <= 0 ? 100 : limitRaw, 500)
+    const fromRaw = typeof req.query.from === 'string' ? parseInt(req.query.from, 10) : null
+    const from    = fromRaw !== null && !Number.isNaN(fromRaw) ? fromRaw : null
 
     let sql = `
       SELECT id, detected_at, mac, metric, observed, expected_avg, expected_std, z_score, severity

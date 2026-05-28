@@ -12,7 +12,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import bcrypt from 'bcryptjs'
-import { getDb } from './db.js'
+import { getDb, getSetting, getSettingInt } from './db.js'
 import {
   setUnifiConfig, getUnifiClient, getUnifiConfig, clearUnifiConfig, UnifiClient,
   type UnifiConfig, type UnifiDevice, type UnifiClient as UClient,
@@ -100,13 +100,9 @@ if (getUnifiConfig()) {
 // Auto-start syslog listener if it was enabled previously
 async function startSyslogIfEnabled(): Promise<void> {
   try {
-    const db      = getDb()
-    const enabled = db.prepare("SELECT value FROM settings WHERE key = 'syslog_enabled'").get() as { value: string } | undefined
-    if (enabled?.value !== '1') return
-    const portRow  = db.prepare("SELECT value FROM settings WHERE key = 'syslog_port'").get()  as { value: string } | undefined
-    const protoRow = db.prepare("SELECT value FROM settings WHERE key = 'syslog_proto'").get() as { value: string } | undefined
-    const port  = parseInt(portRow?.value  ?? '514', 10) || 514
-    const proto = protoRow?.value === 'tcp' ? 'tcp' : 'udp'
+    if (getSetting('syslog_enabled', '0') !== '1') return
+    const port  = getSettingInt('syslog_port', 514)
+    const proto = getSetting('syslog_proto', 'udp') === 'tcp' ? 'tcp' : 'udp'
     await startSyslog(port, proto)
   } catch (err) {
     console.warn('[syslog] Auto-start failed:', err instanceof Error ? err.message : String(err))

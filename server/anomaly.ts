@@ -67,7 +67,8 @@ function detectAnomalies(db: ReturnType<typeof getDb>): void {
   if (getSetting('anomaly_enabled', '1') !== '1') return
 
   const minSamples = getSettingInt('anomaly_min_samples', 10)
-  const zThreshold = parseFloat(getSetting('anomaly_z_threshold', '3')) || 3
+  const rawZ       = parseFloat(getSetting('anomaly_z_threshold', '3'))
+  const zThreshold = Number.isFinite(rawZ) ? rawZ : 3
 
   // Most-recent snapshot per device (within the last 10 minutes)
   const latestSnaps = db.prepare(`
@@ -85,6 +86,11 @@ function detectAnomalies(db: ReturnType<typeof getDb>): void {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `)
 
+  // Hoisted outside the loop — prepared once per detection run
+  const getBaseline = db.prepare(
+    'SELECT avg, stddev, sample_count FROM device_baselines WHERE mac = ? AND metric = ?',
+  )
+
   const now = Date.now()
   const staleThreshold = 10 * 60_000   // ignore snapshots older than 10 min
 
@@ -93,9 +99,7 @@ function detectAnomalies(db: ReturnType<typeof getDb>): void {
       if (now - snap.captured_at > staleThreshold) continue
 
       for (const metric of ['rx_bytes', 'tx_bytes'] as const) {
-        const baseline = db.prepare(
-          'SELECT avg, stddev, sample_count FROM device_baselines WHERE mac = ? AND metric = ?',
-        ).get(snap.mac, metric) as
+        const baseline = getBaseline.get(snap.mac, metric) as
           | { avg: number; stddev: number; sample_count: number }
           | undefined
 
@@ -151,8 +155,8 @@ function updateRiskScores(db: ReturnType<typeof getDb>): void {
   `)
 
   db.transaction(() => {
-    // Reset all scores to 0 first so devices with no recent anomalies get cleared
-    db.prepare('UPDATE known_devices SET risk_score = 0, anomaly_count = 0').run()
+    // Reset all scores; last_anomaly is also cleared so stale timestamps don't persist
+    db.prepare('UPDATE known_devices SET risk_score = 0, anomaly_count = 0, last_anomaly = NULL').run()
 
     for (const row of rows) {
       updateDevice.run(
@@ -172,6 +176,21 @@ export async function runAnomalyDetection(): Promise<void> {
   updateBaselines(db)
   detectAnomalies(db)
   updateRiskScores(db)
+  pruneAnomalyTables(db)
+}
+
+function pruneAnomalyTables(db: ReturnType<typeof getDb>): void {
+  const retentionMs = getSettingInt('anomaly_retention_days', 30) * 86_400_000
+  db.prepare('DELETE FROM anomalies WHERE detected_at < ?').run(Date.now() - retentionMs)
+
+  // Prune baselines for devices not seen in client_snapshots within the 7-day window
+  const baselineCutoff = Date.now() - 7 * 86_400_000
+  db.prepare(`
+    DELETE FROM device_baselines
+    WHERE mac NOT IN (
+      SELECT DISTINCT mac FROM client_snapshots WHERE captured_at > ?
+    )
+  `).run(baselineCutoff)
 }
 
 // ── Anomaly query helpers (used by REST handlers) ─────────────────────────────

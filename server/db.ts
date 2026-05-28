@@ -49,9 +49,13 @@ function runMigrations(db: Database.Database): void {
     if (row) continue
 
     const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8')
-    db.exec(sql)
-    db.prepare('INSERT INTO _migrations (name, applied_at) VALUES (?, ?)')
-      .run(file, Date.now())
+    // Wrap exec + _migrations INSERT in one transaction so a crash between them
+    // leaves nothing committed — the migration is either fully applied or not at all.
+    db.transaction(() => {
+      db.exec(sql)
+      db.prepare('INSERT INTO _migrations (name, applied_at) VALUES (?, ?)')
+        .run(file, Date.now())
+    })()
     console.log(`[db] Applied migration: ${file}`)
   }
 }
@@ -70,5 +74,6 @@ export function getSetting(key: string, defaultVal: string): string {
 }
 
 export function getSettingInt(key: string, defaultVal: number): number {
-  return parseInt(getSetting(key, String(defaultVal)), 10) || defaultVal
+  const n = parseInt(getSetting(key, String(defaultVal)), 10)
+  return Number.isNaN(n) ? defaultVal : n
 }

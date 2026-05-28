@@ -13,6 +13,7 @@
  *   stopSyslog()                    // stop
  *   getSyslogStatus()               // current state
  */
+import crypto from 'node:crypto'
 import dgram from 'node:dgram'
 import net from 'node:net'
 import { getDb } from './db.js'
@@ -38,6 +39,9 @@ let _status: SyslogStatus = {
   receivedCount: 0, startedAt: null, error: null,
 }
 
+// Maximum per-connection TCP buffer before dropping the connection
+const TCP_MAX_BUF = 64 * 1024
+
 // ── RFC 3164 parser ───────────────────────────────────────────────────────────
 
 interface Parsed {
@@ -56,7 +60,8 @@ function parseSyslog(raw: string): Parsed | null {
   if (!m) return null
   const [, priStr, dateStr, hostname, tag, message] = m
   const year = new Date().getFullYear()
-  const ts   = new Date(`${dateStr} ${year}`).getTime()
+  // Normalise double-space padding (e.g. "Jan  5") before parsing
+  const ts = new Date(`${dateStr.replace(/\s+/g, ' ')} ${year}`).getTime()
   return {
     pri:       parseInt(priStr, 10),
     hostname,
@@ -82,15 +87,24 @@ function store(raw: string, remoteAddr: string): void {
   const parsed  = parseSyslog(text)
   const message = (parsed?.message ?? text).slice(0, 500)
   const level   = parsed ? priToLevel(parsed.pri) : classifyLevel(message)
+  const ts      = parsed?.timestamp ?? Date.now()
+
+  // Deterministic dedup key from content — prevents duplicates from UDP retransmits
+  // (events.unifi_id has a UNIQUE constraint; NULL bypasses it so we must supply a value)
+  const syslogId = 'syslog:' + crypto.createHash('sha1')
+    .update(`${remoteAddr}\0${ts}\0${message}`)
+    .digest('hex')
+    .slice(0, 24)
 
   try {
     getDb().prepare(`
       INSERT OR IGNORE INTO events
         (unifi_id, timestamp, level, source, message, device, ip, dst_ip, dst_port, proto, raw)
       VALUES
-        (NULL, ?, ?, 'syslog', ?, ?, ?, NULL, NULL, NULL, ?)
+        (?, ?, ?, 'syslog', ?, ?, ?, NULL, NULL, NULL, ?)
     `).run(
-      parsed?.timestamp ?? Date.now(),
+      syslogId,
+      ts,
       level,
       message,
       parsed?.hostname ?? remoteAddr,
@@ -112,18 +126,25 @@ export function startSyslog(port: number, proto: 'udp' | 'tcp'): Promise<void> {
     if (proto === 'udp') {
       const sock = dgram.createSocket('udp4')
 
-      sock.on('message', (msg, rinfo) => store(msg.toString(), rinfo.address))
+      // Single error handler with a 'settled' flag so it correctly handles both
+      // pre-bind errors (reject + close) and post-bind runtime errors (update status).
+      let settled = false
       sock.on('error', err => {
         console.error('[syslog] UDP error:', err.message)
         _status = { ..._status, running: false, error: err.message }
+        if (!settled) {
+          settled = true
+          try { sock.close() } catch { /* ignore */ }
+          reject(err)
+        }
       })
 
-      // Capture bind error before replacing the module-level variable
-      sock.once('error', err => reject(err))
+      sock.on('message', (msg, rinfo) => store(msg.toString(), rinfo.address))
 
       sock.bind(port, () => {
-        udpSock  = sock
-        _status  = { running: true, port, proto: 'udp', receivedCount: 0, startedAt: Date.now(), error: null }
+        settled = true
+        udpSock = sock
+        _status = { running: true, port, proto: 'udp', receivedCount: 0, startedAt: Date.now(), error: null }
         console.log(`[syslog] UDP listening on :${port}`)
         resolve()
       })
@@ -135,6 +156,11 @@ export function startSyslog(port: number, proto: 'udp' | 'tcp'): Promise<void> {
         socket.setEncoding('utf8')
         socket.on('data', chunk => {
           buf += chunk
+          // Guard against unbounded buffer growth from misbehaving / malicious clients
+          if (buf.length > TCP_MAX_BUF) {
+            socket.destroy()
+            return
+          }
           let nl: number
           while ((nl = buf.indexOf('\n')) !== -1) {
             const line = buf.slice(0, nl)
@@ -145,13 +171,18 @@ export function startSyslog(port: number, proto: 'udp' | 'tcp'): Promise<void> {
         socket.on('error', () => { /* ignore individual connection errors */ })
       })
 
-      srv.once('error', err => reject(err))
+      let settled = false
       srv.on('error', err => {
         console.error('[syslog] TCP error:', err.message)
         _status = { ..._status, running: false, error: err.message }
+        if (!settled) {
+          settled = true
+          reject(err)
+        }
       })
 
       srv.listen(port, () => {
+        settled = true
         tcpSrv  = srv
         _status = { running: true, port, proto: 'tcp', receivedCount: 0, startedAt: Date.now(), error: null }
         console.log(`[syslog] TCP listening on :${port}`)
